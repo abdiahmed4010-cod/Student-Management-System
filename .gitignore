@@ -1,0 +1,43 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Python / Django Backend
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+backend/.env
+backend/.env.*
+!backend/.env.example
+__pycache__/
+*.py[cod]
+*$py.class
+db.sqlite3
+db.sqlite3-journal
+db.sqlite3-shm
+db.sqlite3-wal
+backend/staticfiles/
+backend/media/
+
+# Archives and backups
+*.zip
+*.rar
+*.7z
+*.bak
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.swp
+
+# AI development artifacts
+.aistudio/

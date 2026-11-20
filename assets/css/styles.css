@@ -1,0 +1,400 @@
+@import "tailwindcss";
+
+/* MADARASATUL AL-IMAAM / AL-IMAAMA Official Brand Theme Tokens */
+@theme {
+  /* Royal Navy & Royal Blue Palette calibrated to the Official Logo */
+  --color-blue-50: #EEF4FF;
+  --color-blue-100: #DCE7FE;
+  --color-blue-200: #B8CEFD;
+  --color-blue-300: #85ACFA;
+  --color-blue-400: #4B80F2;
+  --color-blue-500: #1D56BF;
+  --color-blue-600: #1446A0;
+  --color-blue-700: #0F3782;
+  --color-blue-800: #0D2E6B;
+  --color-blue-900: #0A2666;
+  --color-blue-950: #071A4A;
+
+  /* Official Gold Accents calibrated to Logo Stars & Rings */
+  --color-amber-50: #FEF9E7;
+  --color-amber-100: #FDF0C4;
+  --color-amber-200: #F8DF8B;
+  --color-amber-300: #EFC64C;
+  --color-amber-400: #E0B22B;
+  --color-amber-500: #D4A017;
+  --color-amber-600: #B3830E;
+  --color-amber-700: #8E650B;
+  --color-amber-800: #6E4E09;
+
+  /* Leaf Green Accent (sparingly for verified success states) */
+  --color-emerald-50: #ECFDF3;
+  --color-emerald-100: #D1FAE5;
+  --color-emerald-200: #A7F3D0;
+  --color-emerald-500: #16A34A;
+  --color-emerald-600: #15803D;
+  --color-emerald-700: #166534;
+  --color-emerald-800: #14532D;
+
+  /* Crisp Cool-White Surfaces & Dark Navy Ink */
+  --color-slate-50: #F7F9FC;
+  --color-slate-100: #EDF2F8;
+  --color-slate-200: #DCE4F0;
+  --color-slate-800: #162D59;
+  --color-slate-900: #0B1F4B;
+}
+
+:root {
+  --brand-navy: #0A2666;
+  --brand-navy-dark: #071A4A;
+  --brand-royal: #1446A0;
+  --brand-royal-hover: #0F3782;
+  --brand-gold: #D4A017;
+  --brand-gold-soft: #FEF9E7;
+  --brand-leaf: #15803D;
+  --brand-ink: #0B1F4B;
+  --brand-bg: #F7F9FC;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--brand-bg);
+  color: var(--brand-ink);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Arabic RTL Font and Layout Rules */
+html[dir="rtl"],
+html[dir="rtl"] body {
+  font-family: 'Cairo', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  text-align: right;
+}
+
+/* Official Logo Integrity: preserve exact colors, aspect ratio, and white seal framing */
+.official-logo-img {
+  object-fit: contain !important;
+  background-color: #FFFFFF !important;
+  filter: none !important;
+}
+
+/* RTL Sidebar Layout Adjustments */
+html[dir="rtl"] #app-sidebar {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid rgba(212, 160, 23, 0.32);
+  transform: translateX(100%);
+}
+
+@media (min-width: 1024px) {
+  html[dir="rtl"] #app-sidebar {
+    transform: translateX(0);
+  }
+  html[dir="rtl"] #main-layout-container:not(.sidebar-collapsed) {
+    padding-left: 0 !important;
+    padding-right: 16rem !important;
+  }
+}
+
+/* Collapsible Desktop Sidebar Rules */
+#app-sidebar,
+#main-layout-container {
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), padding 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (min-width: 1024px) {
+  #app-sidebar.sidebar-collapsed {
+    width: 5rem !important; /* 80px */
+  }
+  #main-layout-container.sidebar-collapsed {
+    padding-left: 5rem !important;
+    padding-right: 0 !important;
+  }
+  html[dir="rtl"] #main-layout-container.sidebar-collapsed {
+    padding-left: 0 !important;
+    padding-right: 5rem !important;
+  }
+}
+
+#app-sidebar.sidebar-collapsed .sidebar-expanded-text {
+  display: none !important;
+}
+
+#app-sidebar.sidebar-collapsed .nav-link {
+  justify-content: center !important;
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+}
+
+#app-sidebar.sidebar-collapsed .sidebar-role-badge {
+  justify-content: center !important;
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+}
+
+#app-sidebar.sidebar-collapsed .sidebar-tooltip {
+  display: none;
+}
+
+#app-sidebar.sidebar-collapsed .nav-item-wrapper:hover .sidebar-tooltip {
+  display: block;
+}
+
+/* RTL Toast Container */
+html[dir="rtl"] #toast-container {
+  right: auto;
+  left: 1rem;
+}
+
+/* Tabular Numerals for strictly aligned amounts, IDs, and scores */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+span.tabular-nums,
+strong.tabular-nums {
+  direction: ltr;
+  display: inline-block;
+  unicode-bidi: isolate;
+}
+td.tabular-nums,
+th.tabular-nums {
+  display: table-cell;
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+.custom-scrollbar {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 14px; /* Prevents auto-zoom on iOS */
+  }
+}
+
+/* Excel Spreadsheet Cell Input styling */
+.spreadsheet-cell {
+  transition: all 0.15s ease-in-out;
+}
+.spreadsheet-cell:focus {
+  outline: none;
+  border-color: var(--brand-royal);
+  background-color: #EEF4FF;
+  box-shadow: 0 0 0 2px rgba(20, 70, 160, 0.22);
+}
+
+/* Toast animations */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.toast-enter {
+  animation: slideInRight 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+html[dir="rtl"] .toast-enter {
+  animation: slideInLeft 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.toast-exit {
+  animation: fadeOut 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Modal Backdrop & Dialog Transitions */
+.modal-backdrop {
+  background-color: rgba(7, 26, 74, 0.55);
+  backdrop-filter: blur(2px);
+  transition: opacity 0.2s ease-out;
+}
+
+/* Print Rules for Professional Invoices, Receipts, Scorecards & Reports */
+.print-only-flex {
+  display: none;
+}
+
+.print-only-block {
+  display: none;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm 12mm 16mm 12mm;
+  @bottom-left {
+    content: "MADARASATUL AL-IMAAM — AL-IMAAMA School Management System";
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 8pt;
+    color: #475569;
+  }
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 8pt;
+    font-weight: 600;
+    color: #0A2666;
+  }
+}
+
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  html,
+  body {
+    background: #FFFFFF !important;
+    color: #0B1F4B !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .print-only-flex {
+    display: flex !important;
+  }
+  .print-only-block {
+    display: block !important;
+  }
+  .no-print,
+  #app-sidebar,
+  #app-header,
+  #toast-container,
+  #sidebar-overlay,
+  #modal-close-btn,
+  .action-buttons,
+  button:not(.print-allow) {
+    display: none !important;
+    visibility: hidden !important;
+  }
+  #app-shell-container,
+  #main-layout-container,
+  #main-content,
+  #main-content-viewport {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+  }
+  body:has(#active-modal-backdrop) #app-shell-container {
+    display: none !important;
+  }
+  #active-modal-backdrop {
+    position: static !important;
+    background: #FFFFFF !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  #active-modal-backdrop > div {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+  }
+  #active-modal-backdrop > div > div:first-child {
+    display: none !important;
+  }
+  #active-modal-backdrop > div > div:last-child {
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  .printable-area {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-top: 3px solid #0A2666 !important;
+    border-radius: 0 !important;
+    background: #FFFFFF !important;
+    color: #0B1F4B !important;
+    font-family: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  }
+  .printable-area h1,
+  .printable-area h2,
+  .printable-area h3,
+  .printable-area h4 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+  .printable-area .overflow-x-auto {
+    overflow: visible !important;
+  }
+  .printable-area table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+    font-size: 9px !important;
+    line-height: 1.35 !important;
+    border: 1px solid #CBD5E1 !important;
+    table-layout: auto !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tfoot {
+    display: table-row-group !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  tr,
+  .avoid-page-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .printable-area th,
+  .printable-area td {
+    border: 1px solid #CBD5E1 !important;
+    padding: 4px 5px !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    vertical-align: middle !important;
+  }
+  .printable-area th {
+    background-color: #0A2666 !important;
+    color: #FFFFFF !important;
+  }
+  .printable-area .tabular-nums {
+    white-space: nowrap !important;
+  }
+  .printable-area.doc-print-root {
+    border: none !important;
+    border-top: none !important;
+  }
+  .doc-sheet {
+    box-shadow: none !important;
+    margin: 0 auto !important;
+    width: 100% !important;
+  }
+  .doc-page-break {
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+}
+

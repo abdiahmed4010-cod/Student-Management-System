@@ -1,0 +1,33 @@
+# Environment files (never commit real secrets)
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local SQLite databases
+db.sqlite3
+db.sqlite3-journal
+db.sqlite3-shm
+db.sqlite3-wal
+
+# Collected static and user-uploaded media files
+staticfiles/
+media/
+
+# Logs & OS artifacts
+*.log
+.DS_Store
+Thumbs.db
