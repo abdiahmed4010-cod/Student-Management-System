@@ -4,11 +4,16 @@ Automated model & database constraint tests for apps.core (SystemSetting).
 
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from apps.core.models import SystemSetting
+
+User = get_user_model()
 
 
 class SystemSettingModelTests(TestCase):
@@ -64,3 +69,49 @@ class SystemSettingModelTests(TestCase):
                         "VALUES (2, 'Other', '/logo.png', '123', 'a@b.com', 'Addr', '2026-2027', "
                         "'Term 1', 45.00, 35.00, '$', 'sum', 40, 60, CURRENT_TIMESTAMP);"
                     )
+
+
+class DashboardMetricsAPITests(APITestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_user(
+            email="admin_metrics@test.com",
+            password="StrongPassword123!",
+            full_name="Admin Metrics User",
+            role="ADMIN",
+        )
+        self.teacher_user = User.objects.create_user(
+            email="teacher_metrics@test.com",
+            password="StrongPassword123!",
+            full_name="Teacher Metrics User",
+            role="TEACHER",
+        )
+
+    def test_unauthenticated_metrics_returns_401(self):
+        res = self.client.get("/api/v1/dashboard/metrics/")
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_admin_metrics_contains_all_kpis(self):
+        self.client.force_authenticate(user=self.admin_user)
+        res = self.client.get("/api/v1/dashboard/metrics/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertIn("totalStudents", data)
+        self.assertIn("totalTeachers", data)
+        self.assertIn("totalClasses", data)
+        self.assertIn("attendancePercentage", data)
+        self.assertIn("attendanceToday", data)
+        self.assertIn("monthlyFeesCollected", data)
+        self.assertIn("outstandingFees", data)
+        self.assertIn("classDistribution", data)
+
+    def test_teacher_metrics_has_zero_financial_exposure(self):
+        self.client.force_authenticate(user=self.teacher_user)
+        res = self.client.get("/api/v1/dashboard/metrics/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertEqual(data["monthlyFeesCollected"], 0.0)
+        self.assertEqual(data["outstandingFees"], 0.0)
+        self.assertEqual(data["totalFeeObligation"], 0.0)
+        self.assertIn("attendancePercentage", data)
+        self.assertIn("totalClasses", data)
+

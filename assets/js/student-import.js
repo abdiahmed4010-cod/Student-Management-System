@@ -551,39 +551,43 @@ export const StudentImport = {
         confirmBtn.disabled = true;
         confirmBtn.innerHTML = `${Components.icon('refresh-cw', 'w-4 h-4 animate-spin')} Saving to database...`;
 
-        setTimeout(() => {
-          this.executeImport();
-        }, 200);
+        this.executeImport();
       });
     }
   },
 
-  executeImport() {
+  async executeImport() {
     const validRows = this.parsedRows.filter(r => r.status === 'VALID');
     const duplicateRows = this.parsedRows.filter(r => r.status === 'DUPLICATE');
     const invalidRows = this.parsedRows.filter(r => r.status === 'INVALID');
 
     let importedSuccessCount = 0;
+    const failedRows = [];
 
-    validRows.forEach(r => {
-      Data.createStudent({
-        id: r.studentId,
-        fullName: r.fullName,
-        gender: r.gender,
-        dateOfBirth: r.dateOfBirth,
-        parentPhone: r.parentPhone,
-        classId: r.classId,
-        registrationDate: r.registrationDate,
-        status: 'Active'
-      });
-      importedSuccessCount++;
-    });
+    for (const r of validRows) {
+      try {
+        await Data.createStudent({
+          id: r.studentId,
+          fullName: r.fullName,
+          gender: r.gender,
+          dateOfBirth: r.dateOfBirth,
+          parentPhone: r.parentPhone,
+          classId: r.classId,
+          registrationDate: r.registrationDate,
+          status: 'Active'
+        });
+        importedSuccessCount++;
+      } catch (error) {
+        const reason = error.message || 'The backend rejected this record.';
+        failedRows.push({ ...r, errors: [...(r.errors || []), reason] });
+      }
+    }
 
     this.renderResultStep({
       imported: importedSuccessCount,
       skipped: duplicateRows.length,
-      failed: invalidRows.length,
-      failures: [...duplicateRows, ...invalidRows]
+      failed: invalidRows.length + failedRows.length,
+      failures: [...duplicateRows, ...invalidRows, ...failedRows]
     });
 
     if (this.onSuccessCallback) {
@@ -601,7 +605,7 @@ export const StudentImport = {
         <div>
           <h3 class="text-lg font-bold text-slate-900">Import Processing Completed</h3>
           <p class="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-            Student records have been saved to local persistence and are immediately reflected across the system.
+            Only records accepted by the backend are reported as imported and added to the directory.
           </p>
         </div>
 
@@ -622,7 +626,7 @@ export const StudentImport = {
           <div class="p-3 bg-rose-50 rounded-xl border border-rose-200">
             <span class="text-rose-700 block text-[10px] font-bold uppercase">Failed</span>
             <h4 class="text-xl font-bold text-rose-900 mt-0.5 tabular-nums">${failed}</h4>
-            <span class="text-[11px] text-rose-700">Invalid records</span>
+            <span class="text-[11px] text-rose-700">Invalid or rejected records</span>
           </div>
         </div>
 

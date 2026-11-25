@@ -92,7 +92,7 @@ export const Permissions = {
     }
 
     // Primary Super Admin safeguard
-    if (resolved.id === 'usr-1' && resolved.role === ROLES.ADMIN) {
+    if ((resolved.id === 'usr-1' || resolved.is_superuser) && resolved.role === ROLES.ADMIN) {
       return this.getDefaultPermissions(ROLES.ADMIN);
     }
 
@@ -102,7 +102,7 @@ export const Permissions = {
   hasPermission(user, module, action = 'view') {
     if (!user) return false;
     const resolved = this._resolveLatestUser(user);
-    if (resolved.id === 'usr-1' && resolved.role === ROLES.ADMIN) return true;
+    if ((resolved.id === 'usr-1' || resolved.is_superuser) && resolved.role === ROLES.ADMIN) return true;
 
     const perms = this.getUserPermissions(resolved);
     if (!perms[module]) return false;
@@ -167,6 +167,17 @@ export const Permissions = {
     // Teachers may only access permitted academic reports (never financial or promotion)
     const allowedForTeacher = ['students', 'attendance', 'examinations', 'results'];
     return allowedForTeacher.includes(reportCategory);
+  },
+
+  canAccessSubReport(user, reportCategory, subReport) {
+    if (!this.canAccessReport(user, reportCategory)) return false;
+    if (this.isAdmin(user)) return true;
+
+    // Admin-only sub-reports according to BUSINESS_RULES_SPECIFICATION Section 10
+    if (reportCategory === 'students' && subReport === 'all') return false;
+    if (reportCategory === 'results' && subReport === 'class-ranking') return false;
+
+    return true;
   },
 
   _resolveTeacherDetails(user) {

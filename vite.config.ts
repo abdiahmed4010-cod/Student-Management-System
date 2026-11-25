@@ -118,6 +118,8 @@ function alimaamaProjectZipPlugin(): Plugin {
 }
 
 export default defineConfig(() => {
+  const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8000';
+
   return {
     plugins: [react(), tailwindcss(), alimaamaProjectZipPlugin()],
     resolve: {
@@ -131,6 +133,14 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // The frontend and Django development servers use different ports. Keep
+      // browser requests same-origin and forward the API path to Django.
+      proxy: {
+        '/api/v1': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+        },
+      },
     },
   };
 });

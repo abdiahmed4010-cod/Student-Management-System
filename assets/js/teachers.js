@@ -130,10 +130,20 @@ export const TeachersView = {
           message: `Are you sure you want to remove <strong>${teacher.fullName}</strong> (${teacher.id})? This will detach assigned classes and subjects.`,
           confirmText: 'Delete Teacher',
           isDestructive: true,
-          onConfirm: () => {
-            Data.deleteTeacher(teacher.id);
-            Components.showToast(`Teacher ${teacher.fullName} removed.`, 'success');
-            this.render(container);
+          onConfirm: async () => {
+            try {
+              const result = await Data.deleteTeacher(teacher.id);
+              Components.showToast(
+                result.refreshWarning
+                  ? `Teacher ${teacher.fullName} was removed, but the list could not be refreshed. Reload the page to retry.`
+                  : `Teacher ${teacher.fullName} removed.`,
+                result.refreshWarning ? 'warning' : 'success',
+                5000
+              );
+              this.render(container);
+            } catch (error) {
+              Components.showToast(`Could not remove teacher: ${error.message || 'The backend rejected the request.'}`, 'error', 6000);
+            }
           }
         });
       });
@@ -144,6 +154,7 @@ export const TeachersView = {
     const isEdit = !!existing;
     const classes = Data.getClasses();
     const subjects = Data.getSubjects();
+    const today = new Date().toISOString().split('T')[0];
 
     const selectedClasses = existing ? (existing.assignedClassIds || []) : [];
     const selectedSubjects = existing ? (existing.assignedSubjectIds || []) : [];
@@ -254,7 +265,7 @@ export const TeachersView = {
 
     document.getElementById('modal-cancel-tch').addEventListener('click', () => Components.closeModal());
 
-    document.getElementById('teacher-form').addEventListener('submit', (e) => {
+    document.getElementById('teacher-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
       const formData = new FormData(form);
@@ -269,19 +280,38 @@ export const TeachersView = {
         specialization: formData.get('specialization'),
         assignedClassIds,
         assignedSubjectIds,
-        accountStatus: 'Active'
+        accountStatus: 'Active',
+        joinedDate: (isEdit && existing.joinedDate) || today,
       };
 
-      if (isEdit) {
-        Data.updateTeacher(existing.id, payload);
-        Components.showToast(`Teacher ${payload.fullName} updated.`, 'success');
-      } else {
-        Data.addTeacher(payload);
-        Components.showToast(`Teacher ${payload.fullName} added successfully.`, 'success');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const originalButtonText = submitButton ? submitButton.innerHTML : '';
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = isEdit ? 'Saving…' : 'Registering…';
       }
+      try {
+        const saved = isEdit
+          ? await Data.updateTeacher(existing.id, payload)
+          : await Data.addTeacher(payload);
+        const action = isEdit ? 'updated' : 'added';
+        Components.showToast(
+          saved.refreshWarning
+            ? `Teacher ${payload.fullName} was ${action}, but the list could not be refreshed. Reload the page to retry.`
+            : `Teacher ${payload.fullName} ${isEdit ? 'updated' : 'added successfully'}.`,
+          saved.refreshWarning ? 'warning' : 'success',
+          5000
+        );
 
-      Components.closeModal();
-      this.render(parentContainer);
+        Components.closeModal();
+        this.render(parentContainer);
+      } catch (error) {
+        Components.showToast(`Could not save teacher: ${error.message || 'The backend rejected the request.'}`, 'error', 6000);
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.innerHTML = originalButtonText;
+        }
+      }
     });
   },
 

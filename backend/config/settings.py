@@ -138,38 +138,106 @@ ASGI_APPLICATION = "config.asgi.application"
 
 
 # ------------------------------------------------------------------------------
-# Database (Development SQLite in Stage 3.2; Production MySQL in Future Stage)
+# Database (SQLite by default; explicitly selected MySQL for staging/production)
 # ------------------------------------------------------------------------------
 
 DB_ENGINE = os.getenv("DB_ENGINE", "sqlite").strip().lower()
-if DB_ENGINE == "mysql":
+if DB_ENGINE not in {"sqlite", "mysql"}:
     raise ImproperlyConfigured(
-        "MySQL production database connectivity is not enabled in Stage 3.2; "
-        "it will be configured in a subsequent authorized Phase 3 stage."
-    )
-if DB_ENGINE != "sqlite":
-    raise ImproperlyConfigured(
-        f"Unsupported DB_ENGINE={DB_ENGINE!r}. Only 'sqlite' is enabled in Stage 3.2."
+        "Unsupported DB_ENGINE. Choose either 'sqlite' or 'mysql'."
     )
 
-SQLITE_DB_NAME = os.getenv("SQLITE_DB_NAME", "db.sqlite3").strip() or "db.sqlite3"
-if SQLITE_DB_NAME == ":memory:":
-    SQLITE_DB_PATH = ":memory:"
-else:
-    _raw_db_path = Path(SQLITE_DB_NAME)
-    SQLITE_DB_PATH = (
-        _raw_db_path.resolve()
-        if _raw_db_path.is_absolute()
-        else (BASE_DIR / _raw_db_path).resolve()
-    )
-    SQLITE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+if DB_ENGINE == "sqlite":
+    SQLITE_DB_NAME = os.getenv("SQLITE_DB_NAME", "db.sqlite3").strip() or "db.sqlite3"
+    if SQLITE_DB_NAME == ":memory:":
+        SQLITE_DB_PATH = ":memory:"
+    else:
+        _raw_db_path = Path(SQLITE_DB_NAME)
+        SQLITE_DB_PATH = (
+            _raw_db_path.resolve()
+            if _raw_db_path.is_absolute()
+            else (BASE_DIR / _raw_db_path).resolve()
+        )
+        SQLITE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": SQLITE_DB_PATH,
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": SQLITE_DB_PATH,
+        }
     }
-}
+else:
+    _mysql_required = ("DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT")
+    _mysql_values = {name: os.getenv(name, "").strip() for name in _mysql_required}
+    _mysql_missing = [name for name, value in _mysql_values.items() if not value]
+    if _mysql_missing:
+        raise ImproperlyConfigured(
+            "DB_ENGINE='mysql' requires non-empty values for: "
+            + ", ".join(_mysql_missing)
+            + "."
+        )
+
+    try:
+        _mysql_port = int(_mysql_values["DB_PORT"])
+    except ValueError as exc:
+        raise ImproperlyConfigured("DB_PORT must be an integer from 1 to 65535.") from exc
+    if not 1 <= _mysql_port <= 65535:
+        raise ImproperlyConfigured("DB_PORT must be an integer from 1 to 65535.")
+
+    DB_CONN_MAX_AGE = os.getenv("DB_CONN_MAX_AGE", "60").strip()
+    try:
+        DB_CONN_MAX_AGE = int(DB_CONN_MAX_AGE)
+    except ValueError as exc:
+        raise ImproperlyConfigured("DB_CONN_MAX_AGE must be a non-negative integer.") from exc
+    if DB_CONN_MAX_AGE < 0:
+        raise ImproperlyConfigured("DB_CONN_MAX_AGE must be a non-negative integer.")
+
+    DB_CHARSET = os.getenv("DB_CHARSET", "utf8mb4").strip().lower()
+    if DB_CHARSET != "utf8mb4":
+        raise ImproperlyConfigured("DB_CHARSET must be 'utf8mb4'.")
+
+    DB_COLLATION = os.getenv("DB_COLLATION", "utf8mb4_unicode_ci").strip().lower()
+    if DB_COLLATION not in {"utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci"}:
+        raise ImproperlyConfigured(
+            "DB_COLLATION must be 'utf8mb4_unicode_ci' or 'utf8mb4_0900_ai_ci'."
+        )
+
+    DB_ISOLATION_LEVEL = os.getenv("DB_ISOLATION_LEVEL", "read committed").strip().lower()
+    if DB_ISOLATION_LEVEL not in {
+        "read uncommitted",
+        "read committed",
+        "repeatable read",
+        "serializable",
+    }:
+        raise ImproperlyConfigured(
+            "DB_ISOLATION_LEVEL must be one of: read uncommitted, read committed, "
+            "repeatable read, serializable."
+        )
+
+    # Values that enter this SQL are validated against fixed allowlists above.
+    # Keep strict mode enabled and make new Django-created tables use InnoDB.
+    _mysql_init_command = (
+        "SET SESSION sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,"
+        "NO_ENGINE_SUBSTITUTION', SESSION default_storage_engine='InnoDB', "
+        "SESSION character_set_connection='utf8mb4', "
+        f"SESSION collation_connection='{DB_COLLATION}'"
+    )
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": _mysql_values["DB_NAME"],
+            "USER": _mysql_values["DB_USER"],
+            "PASSWORD": _mysql_values["DB_PASSWORD"],
+            "HOST": _mysql_values["DB_HOST"],
+            "PORT": str(_mysql_port),
+            "CONN_MAX_AGE": DB_CONN_MAX_AGE,
+            "OPTIONS": {
+                "charset": DB_CHARSET,
+                "init_command": _mysql_init_command,
+                "isolation_level": DB_ISOLATION_LEVEL,
+            },
+        }
+    }
 
 
 def _enable_sqlite_foreign_keys(sender, connection, **kwargs):

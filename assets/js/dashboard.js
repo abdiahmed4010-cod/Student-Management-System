@@ -15,21 +15,24 @@ import { TeachersView } from './teachers.js';
 import { PaymentsView } from './payments.js';
 import { AttendanceView } from './attendance.js';
 import { ExaminationsView } from './examinations.js';
+import { API } from './api.js';
 
 let teacherStudentSearchQuery = '';
 
 export const DashboardView = {
   render(container) {
     const user = Auth.getCurrentUser();
-    if (Permissions.isAdmin(user)) {
-      this.renderAdminDashboard(container, user);
-    } else {
-      this.renderTeacherDashboard(container, user);
-    }
+    container.innerHTML = '<div class="p-8 text-sm text-slate-500">Loading dashboard metrics…</div>';
+    API.dashboard.metrics().then(metrics => {
+      if (window.location.hash && !window.location.hash.startsWith('#dashboard')) return;
+      if (Permissions.isAdmin(user)) this.renderAdminDashboard(container, user, metrics);
+      else this.renderTeacherDashboard(container, user, metrics);
+    }).catch(() => {
+      container.innerHTML = '<div role="alert" class="p-8 text-sm text-rose-700">Dashboard metrics could not be loaded. Check your connection and try again.</div>';
+    });
   },
 
-  renderAdminDashboard(container, user) {
-    const metrics = Data.getDashboardMetrics();
+  renderAdminDashboard(container, user, metrics) {
     const settings = Data.getSettings();
     const currency = settings.currencySymbol || '$';
     const classes = Data.getClasses();
@@ -258,7 +261,7 @@ export const DashboardView = {
                     <div class="p-3 flex items-center justify-between hover:bg-slate-50">
                       <div>
                         <p class="font-semibold text-slate-900">${s.fullName}</p>
-                        <span class="text-slate-400 font-mono text-[11px]">${s.id} · ${cls ? cls.name : ''}</span>
+                        <span class="text-slate-400 font-mono text-[11px]">${s.admissionNumber || s.id} · ${cls ? cls.name : ''}</span>
                       </div>
                       <span class="text-slate-400 tabular-nums text-[11px]">${s.registrationDate}</span>
                     </div>
@@ -330,7 +333,7 @@ export const DashboardView = {
     this.bindAdminEvents(container);
   },
 
-  renderTeacherDashboard(container, user) {
+  renderTeacherDashboard(container, user, metrics) {
     const classes = Data.getClasses();
     const subjects = Data.getSubjects();
     const students = Data.getStudents();
@@ -382,7 +385,7 @@ export const DashboardView = {
     let filteredRoster = myStudents;
     if (teacherStudentSearchQuery) {
       const q = teacherStudentSearchQuery.toLowerCase();
-      filteredRoster = myStudents.filter(s => s.fullName.toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
+      filteredRoster = myStudents.filter(s => s.fullName.toLowerCase().includes(q) || String(s.admissionNumber || s.id).toLowerCase().includes(q));
     }
 
     container.innerHTML = `
@@ -412,7 +415,7 @@ export const DashboardView = {
               <span class="text-[10px] font-bold uppercase tracking-wider">${I18n.t('dashboard.myClasses', 'My Classes')}</span>
               ${Components.icon('school', 'w-4 h-4 text-blue-600')}
             </div>
-            <h3 class="text-2xl font-bold text-slate-900 mt-2 tabular-nums">${myClasses.length}</h3>
+            <h3 class="text-2xl font-bold text-slate-900 mt-2 tabular-nums">${metrics.totalClasses}</h3>
             <span class="text-xs text-slate-500 mt-0.5 block truncate">${myClasses.map(c => c.name).join(', ') || I18n.t('common.none', 'None')}</span>
           </div>
 
@@ -430,7 +433,7 @@ export const DashboardView = {
               <span class="text-[10px] font-bold uppercase tracking-wider">${I18n.t('dashboard.myStudents', 'Enrolled Students')}</span>
               ${Components.icon('graduation-cap', 'w-4 h-4 text-emerald-600')}
             </div>
-            <h3 class="text-2xl font-bold text-emerald-600 mt-2 tabular-nums">${myStudents.length}</h3>
+            <h3 class="text-2xl font-bold text-emerald-600 mt-2 tabular-nums">${metrics.totalStudents}</h3>
             <span class="text-xs text-slate-500 mt-0.5 block">${I18n.t('dashboard.studentsEnrolledInYourClasses', 'in your assigned classes')}</span>
           </div>
 
@@ -439,8 +442,8 @@ export const DashboardView = {
               <span class="text-[10px] font-bold uppercase tracking-wider">${I18n.t('dashboard.attendanceRecordedToday', 'Attendance Today')}</span>
               ${Components.icon('clipboard-check', 'w-4 h-4 text-emerald-600')}
             </div>
-            <h3 class="text-2xl font-bold text-slate-900 mt-2 tabular-nums">${myAttendanceToday.length}</h3>
-            <span class="text-xs text-slate-500 mt-0.5 block">${myAttendanceToday.filter(a => a.status === 'Present').length} ${I18n.t('attendance.present', 'Present')}</span>
+            <h3 class="text-2xl font-bold text-slate-900 mt-2 tabular-nums">${metrics.attendanceToday.total}</h3>
+            <span class="text-xs text-slate-500 mt-0.5 block">${metrics.attendanceToday.present} ${I18n.t('attendance.present', 'Present')}</span>
           </div>
         </div>
 
@@ -673,7 +676,7 @@ export const DashboardView = {
                   const cls = classes.find(c => c.id === s.classId);
                   return `
                     <tr class="hover:bg-slate-50 transition-colors">
-                      <td class="py-2.5 px-4 font-mono font-medium text-blue-600">${s.id}</td>
+                      <td class="py-2.5 px-4 font-mono font-medium text-blue-600">${s.admissionNumber || s.id}</td>
                       <td class="py-2.5 px-4 font-semibold text-slate-900">${s.fullName}</td>
                       <td class="py-2.5 px-4">${cls ? cls.name : ''}</td>
                       <td class="py-2.5 px-4">${s.gender}</td>
@@ -749,7 +752,7 @@ export const DashboardView = {
       searchInput.addEventListener('input', (e) => {
         teacherStudentSearchQuery = e.target.value;
         const user = Auth.getCurrentUser();
-        this.renderTeacherDashboard(container, user);
+        this.render(container);
       });
     }
 
@@ -782,7 +785,7 @@ export const DashboardView = {
                 <tbody class="divide-y divide-slate-100">
                   ${students.length > 0 ? students.map(s => `
                     <tr class="hover:bg-slate-50">
-                      <td class="py-2 px-3 font-mono font-medium text-blue-600">${s.id}</td>
+                      <td class="py-2 px-3 font-mono font-medium text-blue-600">${s.admissionNumber || s.id}</td>
                       <td class="py-2 px-3 font-semibold text-slate-800">${s.fullName}</td>
                       <td class="py-2 px-3">${s.gender}</td>
                       <td class="py-2 px-3 font-mono text-slate-500">${s.parentPhone}</td>

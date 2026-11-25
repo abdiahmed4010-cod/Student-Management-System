@@ -136,6 +136,59 @@ export const Components = {
     XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
   },
 
+  // Standard Tabular CSV Export (RFC 4180 with UTF-8 BOM) (Stage 3.9)
+  exportToCSV(filename, headers, rows, totalsRow = null, meta = null) {
+    const lines = [];
+
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '""';
+      let str = typeof val === 'number' ? String(val) : String(val).replace(/<[^>]*>/g, '').trim();
+      if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+        str = `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    if (meta) {
+      const inst = meta.institutionName || 'MADARASATUL AL-IMAAM';
+      const sys = meta.systemName || 'AL-IMAAMA';
+      lines.push([escapeCsv(`${inst} — ${sys}`)].join(','));
+      if (meta.reportTitle) lines.push([escapeCsv(meta.reportTitle)].join(','));
+      const detailParts = [];
+      if (meta.academicPeriod) detailParts.push(`Academic Period: ${meta.academicPeriod}`);
+      if (meta.filterDescription) detailParts.push(`Scope: ${meta.filterDescription}`);
+      if (meta.generatedDate) detailParts.push(`Generated: ${meta.generatedDate}`);
+      if (detailParts.length > 0) lines.push([escapeCsv(detailParts.join(' | '))].join(','));
+      lines.push('');
+    }
+
+    const cleanHeaders = headers.map(h => escapeCsv(typeof h === 'object' ? h.label : h));
+    lines.push(cleanHeaders.join(','));
+
+    rows.forEach(row => {
+      lines.push(row.map(escapeCsv).join(','));
+    });
+
+    if (totalsRow && totalsRow.length > 0) {
+      lines.push(totalsRow.map(escapeCsv).join(','));
+    }
+
+    const csvContent = lines.join('\r\n');
+    const safeName = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', safeName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    return csvContent;
+  },
+
   async _loadLogoDataUrl() {
     try {
       const resp = await fetch(OFFICIAL_LOGO_SRC);

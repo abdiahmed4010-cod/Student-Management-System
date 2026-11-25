@@ -11,10 +11,9 @@ Staged Migration Sequencing Note:
   `academics.Teacher`, `on_delete=SET_NULL`) is deferred to a follow-up
   migration in the stage that introduces `apps.academics`, because Stage 3.3
   strictly prohibits creating business models such as `Teacher`.
-- `UserPermission` (`studently_user_permissions`) is deferred to Stage 3.6
+- `UserPermission` (`studently_user_permissions`) implemented in Stage 3.6
   (RBAC). `has_perm()` and `has_module_perms()` follow the approved Phase 2
-  fail-closed specification and safely deny non-superuser requests when no
-  permission relation or record exists.
+  fail-closed specification and evaluate against explicit permission records.
 """
 
 import re
@@ -403,3 +402,141 @@ class User(AbstractBaseUser):
                 user_perm.can_export,
             ]
         )
+
+
+class UserPermission(models.Model):
+    """
+    Granular per-user RBAC overrides across all 14 functional modules (Stage 3.6).
+
+    Validation Architecture:
+    - Django Model Choices (MODULE_CHOICES) provide application-level form and serializer validation.
+    - Database Check Constraint (chk_perm_module) enforces relational data integrity at the SQL level.
+    """
+
+    MODULE_CHOICES = [
+        ("students", "Student Management"),
+        ("attendance", "Attendance Tracking"),
+        ("examinations", "Examinations & Marks"),
+        ("reports", "Reports Engine"),
+        ("fees", "Fee Structures"),
+        ("payments", "Student Payments"),
+        ("income", "Institutional Income"),
+        ("expenses", "Institutional Expenses"),
+        ("teachers", "Faculty & Teachers"),
+        ("classes", "Classes & Grades"),
+        ("subjects", "Academic Subjects"),
+        ("users", "User Management"),
+        ("certificates", "Certificates & Transcripts"),
+        ("settings", "System Settings"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="module_permissions",
+        db_column="user_id",
+    )
+    module = models.CharField(max_length=30, choices=MODULE_CHOICES)
+    can_view = models.BooleanField(default=False)
+    can_add = models.BooleanField(default=False)
+    can_edit = models.BooleanField(default=False)
+    can_delete = models.BooleanField(default=False)
+    can_import = models.BooleanField(default=False)
+    can_print = models.BooleanField(default=False)
+    can_export = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "studently_user_permissions"
+        ordering = ["user", "module"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "module"],
+                name="unique_user_module_permission",
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    module__in=[
+                        "students",
+                        "attendance",
+                        "examinations",
+                        "reports",
+                        "fees",
+                        "payments",
+                        "income",
+                        "expenses",
+                        "teachers",
+                        "classes",
+                        "subjects",
+                        "users",
+                        "certificates",
+                        "settings",
+                    ]
+                ),
+                name="chk_perm_module",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not hasattr(self, "user") or not self.user_id:
+            return
+
+        # Teacher hard safety ceiling enforcement across all financial and restricted administrative modules
+        if self.user.role == "TEACHER":
+            if self.module in ["payments", "fees", "income", "expenses"]:
+                if any(
+                    [
+                        self.can_view,
+                        self.can_add,
+                        self.can_edit,
+                        self.can_delete,
+                        self.can_import,
+                        self.can_print,
+                        self.can_export,
+                    ]
+                ):
+                    raise ValidationError("Teachers cannot hold financial permissions.")
+            if self.module in ["users", "settings", "certificates"]:
+                if any(
+                    [
+                        self.can_view,
+                        self.can_add,
+                        self.can_edit,
+                        self.can_delete,
+                        self.can_import,
+                        self.can_print,
+                        self.can_export,
+                    ]
+                ):
+                    raise ValidationError(
+                        "Teachers cannot hold administrative or certificate issuance permissions."
+                    )
+            if self.module == "students" and any(
+                [self.can_add, self.can_edit, self.can_delete, self.can_import]
+            ):
+                raise ValidationError("Teachers cannot modify student demographic records.")
+            if self.module in ["attendance", "examinations"] and self.can_delete:
+                raise ValidationError(
+                    "Teachers cannot delete attendance or examination history."
+                )
+            if self.module not in [
+                "students",
+                "attendance",
+                "examinations",
+                "reports",
+                "classes",
+                "subjects",
+                "teachers",
+            ]:
+                raise ValidationError(
+                    f"Teachers cannot hold permissions for non-academic module '{self.module}'."
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.module}"
+

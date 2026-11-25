@@ -5,6 +5,8 @@
 
 import { Storage } from './storage.js';
 import { Permissions } from './permissions.js';
+import { API } from './api.js';
+import { PaymentSyncEngine, PAYMENT_SYNC_STATUS } from './payment_sync.js';
 
 export const Data = {
   _getActiveSessionUser() {
@@ -40,27 +42,48 @@ export const Data = {
   },
 
   addStudent(studentData) {
-    if (!this._checkPermission('students', 'add')) {
-      return null;
-    }
-    const students = this.getStudents();
-    // Validate exactly the 7 fields required
-    const newStudent = {
-      id: studentData.id || Storage.generateNextStudentId(),
-      fullName: studentData.fullName.trim(),
-      gender: studentData.gender,
-      dateOfBirth: studentData.dateOfBirth,
-      parentPhone: studentData.parentPhone.trim(),
-      classId: studentData.classId,
-      registrationDate: studentData.registrationDate || new Date().toISOString().split('T')[0]
-    };
-    students.push(newStudent);
-    Storage.set(Storage.KEYS.STUDENTS, students);
-    return newStudent;
+    return this.createStudent(studentData);
   },
 
-  createStudent(studentData) {
-    return this.addStudent(studentData);
+  async createStudent(studentData) {
+    if (!this._checkPermission('students', 'add')) {
+      throw new Error('You do not have permission to register students.');
+    }
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to save student records. Please sign in again.');
+    }
+
+    const admissionNumber = studentData.admissionNumber || studentData.id || Storage.generateNextStudentId();
+    const response = await API.students.create({
+      admission_number: admissionNumber,
+      full_name: (studentData.fullName || '').trim(),
+      gender: studentData.gender,
+      date_of_birth: studentData.dateOfBirth,
+      parent_phone: (studentData.parentPhone || '').trim(),
+      classroom: studentData.classId,
+      registration_date: studentData.registrationDate || new Date().toISOString().split('T')[0],
+      status: studentData.status || 'Active',
+    });
+
+    // Use the confirmed API response as the source of truth. Preserve the UUID
+    // primary key for relationships and the admission number for display.
+    const savedStudent = {
+      id: response.id,
+      admissionNumber: response.admission_number || response.studentId || admissionNumber,
+      fullName: response.full_name || response.fullName || studentData.fullName.trim(),
+      gender: response.gender || studentData.gender,
+      dateOfBirth: response.date_of_birth || response.dateOfBirth || studentData.dateOfBirth,
+      parentPhone: response.parent_phone || response.parentPhone || studentData.parentPhone.trim(),
+      classId: response.classroom || response.classId || response.class_id || studentData.classId,
+      registrationDate: response.registration_date || response.registrationDate || studentData.registrationDate,
+      status: response.status || studentData.status || 'Active',
+    };
+    const students = this.getStudents().filter(student =>
+      student.id !== savedStudent.id && student.admissionNumber !== savedStudent.admissionNumber
+    );
+    students.push(savedStudent);
+    Storage.set(Storage.KEYS.STUDENTS, students);
+    return savedStudent;
   },
 
   updateStudent(id, studentData) {
@@ -157,42 +180,85 @@ export const Data = {
     return Storage.get(Storage.KEYS.SUBJECTS, []);
   },
 
+  _mapSubjectFromApi(subject) {
+    return {
+      id: subject.id,
+      classId: subject.classroom || subject.classId || subject.classroom_id || '',
+      name: subject.name || '',
+      code: subject.code || '',
+      maxMarks: Number(subject.max_marks ?? subject.maxMarks ?? 100),
+      passMark: Number(subject.pass_mark ?? subject.passMark ?? 50),
+      teacherId: subject.teacher || subject.teacherId || '',
+    };
+  },
+
+  async syncSubjectsFromBackend() {
+    const response = await API.subjects.list();
+    const subjects = Array.isArray(response) ? response : (response.results || []);
+    const mapped = subjects.map(subject => this._mapSubjectFromApi(subject));
+    Storage.set(Storage.KEYS.SUBJECTS, mapped);
+    return mapped;
+  },
+
+  async _refreshSubjectsAfterMutation() {
+    try {
+      await this.syncSubjectsFromBackend();
+      return true;
+    } catch (error) {
+      console.warn('Subject was saved, but the subject list could not be refreshed:', error);
+      return false;
+    }
+  },
+
   getSubjectsByClass(classId) {
     const subjects = this.getSubjects();
     return subjects.filter(s => s.classId === classId);
   },
 
   addSubject(subjectData) {
-    const subjects = this.getSubjects();
-    const newSubject = {
-      id: subjectData.id || Storage.uuid('sub'),
-      classId: subjectData.classId,
-      name: subjectData.name.trim(),
-      code: subjectData.code ? subjectData.code.trim().toUpperCase() : '',
-      maxMarks: parseInt(subjectData.maxMarks, 10) || 100
-    };
-    subjects.push(newSubject);
-    Storage.set(Storage.KEYS.SUBJECTS, subjects);
-    return newSubject;
+    return this.createSubject(subjectData);
   },
 
-  updateSubject(id, subjectData) {
-    const subjects = this.getSubjects();
-    const index = subjects.findIndex(s => s.id === id);
-    if (index === -1) return null;
-
-    subjects[index] = {
-      ...subjects[index],
-      name: subjectData.name.trim(),
-      code: subjectData.code ? subjectData.code.trim().toUpperCase() : '',
-      maxMarks: parseInt(subjectData.maxMarks, 10) || 100,
-      classId: subjectData.classId
-    };
+  async createSubject(subjectData) {
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to save subjects. Please sign in again.');
+    }
+    const response = await API.subjects.create({
+      classroom: subjectData.classId,
+      name: (subjectData.name || '').trim(),
+      code: subjectData.code ? subjectData.code.trim().toUpperCase() : null,
+      max_marks: parseInt(subjectData.maxMarks, 10) || 100,
+    });
+    const savedSubject = this._mapSubjectFromApi(response);
+    if (!savedSubject.id) {
+      throw new Error('The backend accepted the subject but did not return its ID.');
+    }
+    const subjects = this.getSubjects().filter(subject => subject.id !== savedSubject.id);
+    subjects.push(savedSubject);
     Storage.set(Storage.KEYS.SUBJECTS, subjects);
-    return subjects[index];
+    const listRefreshed = await this._refreshSubjectsAfterMutation();
+    return { ...savedSubject, refreshWarning: !listRefreshed };
   },
 
-  deleteSubject(id) {
+  async updateSubject(id, subjectData) {
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to update subjects. Please sign in again.');
+    }
+    const response = await API.subjects.update(id, {
+      classroom: subjectData.classId,
+      name: (subjectData.name || '').trim(),
+      code: subjectData.code ? subjectData.code.trim().toUpperCase() : null,
+      max_marks: parseInt(subjectData.maxMarks, 10) || 100,
+    });
+    const savedSubject = this._mapSubjectFromApi(response);
+    const subjects = this.getSubjects().filter(subject => subject.id !== id && subject.id !== savedSubject.id);
+    subjects.push(savedSubject);
+    Storage.set(Storage.KEYS.SUBJECTS, subjects);
+    const listRefreshed = await this._refreshSubjectsAfterMutation();
+    return { ...savedSubject, refreshWarning: !listRefreshed };
+  },
+
+  async deleteSubject(id) {
     const exams = this._getRawExaminations();
     let marksExist = false;
     exams.forEach(ex => {
@@ -213,10 +279,14 @@ export const Data = {
       };
     }
 
-    let subjects = this.getSubjects();
-    subjects = subjects.filter(s => s.id !== id);
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to delete subjects. Please sign in again.');
+    }
+    await API.subjects.delete(id);
+    const subjects = this.getSubjects().filter(subject => subject.id !== id);
     Storage.set(Storage.KEYS.SUBJECTS, subjects);
-    return { success: true };
+    const listRefreshed = await this._refreshSubjectsAfterMutation();
+    return { success: true, refreshWarning: !listRefreshed };
   },
 
   // --- TEACHERS ---
@@ -234,50 +304,96 @@ export const Data = {
     return teachers.find(t => t.email.toLowerCase() === email.toLowerCase()) || null;
   },
 
+  _mapTeacherFromApi(teacher) {
+    return {
+      id: teacher.id,
+      fullName: teacher.full_name || teacher.fullName || '',
+      email: teacher.email || '',
+      phone: teacher.phone || '',
+      specialization: teacher.specialization || '',
+      joinedDate: teacher.joined_date || teacher.joinedDate || teacher.joiningDate || '',
+      assignedClassIds: teacher.assigned_class_ids || teacher.assignedClassIds || [],
+      assignedSubjectIds: teacher.assigned_subject_ids || teacher.assignedSubjectIds || [],
+      accountStatus: teacher.account_status || teacher.accountStatus || 'Active',
+    };
+  },
+
+  async syncTeachersFromBackend() {
+    const response = await API.teachers.list();
+    const teachers = Array.isArray(response) ? response : (response.results || []);
+    const mapped = teachers.map(teacher => this._mapTeacherFromApi(teacher));
+    Storage.set(Storage.KEYS.TEACHERS, mapped);
+    return mapped;
+  },
+
+  async _refreshTeachersAfterMutation() {
+    try {
+      await this.syncTeachersFromBackend();
+      return true;
+    } catch (error) {
+      console.warn('Teacher was saved, but the teacher list could not be refreshed:', error);
+      return false;
+    }
+  },
+
   addTeacher(teacherData) {
-    const teachers = this.getTeachers();
-    const newTeacher = {
-      id: teacherData.id || Storage.uuid('tch'),
-      fullName: teacherData.fullName.trim(),
-      email: teacherData.email.trim().toLowerCase(),
-      phone: teacherData.phone.trim(),
-      assignedClassIds: Array.isArray(teacherData.assignedClassIds) ? teacherData.assignedClassIds : [],
-      assignedSubjectIds: Array.isArray(teacherData.assignedSubjectIds) ? teacherData.assignedSubjectIds : [],
-      accountStatus: teacherData.accountStatus || 'Active',
-      specialization: teacherData.specialization ? teacherData.specialization.trim() : '',
-      joinedDate: teacherData.joinedDate || new Date().toISOString().split('T')[0]
-    };
-    teachers.push(newTeacher);
-    Storage.set(Storage.KEYS.TEACHERS, teachers);
-
-    // Also verify or sync associated User account if needed
-    return newTeacher;
+    return this.createTeacher(teacherData);
   },
 
-  updateTeacher(id, teacherData) {
-    const teachers = this.getTeachers();
-    const index = teachers.findIndex(t => t.id === id);
-    if (index === -1) return null;
-
-    teachers[index] = {
-      ...teachers[index],
-      fullName: teacherData.fullName.trim(),
-      email: teacherData.email.trim().toLowerCase(),
-      phone: teacherData.phone.trim(),
-      assignedClassIds: Array.isArray(teacherData.assignedClassIds) ? teacherData.assignedClassIds : [],
-      assignedSubjectIds: Array.isArray(teacherData.assignedSubjectIds) ? teacherData.assignedSubjectIds : [],
-      accountStatus: teacherData.accountStatus || teachers[index].accountStatus,
-      specialization: teacherData.specialization ? teacherData.specialization.trim() : teachers[index].specialization
-    };
+  async createTeacher(teacherData) {
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to save teachers. Please sign in again.');
+    }
+    const response = await API.teachers.create({
+      full_name: (teacherData.fullName || '').trim(),
+      email: (teacherData.email || '').trim().toLowerCase(),
+      phone: (teacherData.phone || '').trim(),
+      account_status: teacherData.accountStatus || 'Active',
+      specialization: (teacherData.specialization || '').trim(),
+      joined_date: teacherData.joinedDate || new Date().toISOString().split('T')[0],
+      assigned_class_ids: teacherData.assignedClassIds || [],
+      assigned_subject_ids: teacherData.assignedSubjectIds || [],
+    });
+    const savedTeacher = this._mapTeacherFromApi(response);
+    if (!savedTeacher.id) throw new Error('The backend accepted the teacher but did not return its ID.');
+    const teachers = this.getTeachers().filter(teacher => teacher.id !== savedTeacher.id);
+    teachers.push(savedTeacher);
     Storage.set(Storage.KEYS.TEACHERS, teachers);
-    return teachers[index];
+    const listRefreshed = await this._refreshTeachersAfterMutation();
+    return { ...savedTeacher, refreshWarning: !listRefreshed };
   },
 
-  deleteTeacher(id) {
-    let teachers = this.getTeachers();
-    teachers = teachers.filter(t => t.id !== id);
+  async updateTeacher(id, teacherData) {
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to update teachers. Please sign in again.');
+    }
+    const response = await API.teachers.update(id, {
+      full_name: (teacherData.fullName || '').trim(),
+      email: (teacherData.email || '').trim().toLowerCase(),
+      phone: (teacherData.phone || '').trim(),
+      account_status: teacherData.accountStatus || 'Active',
+      specialization: (teacherData.specialization || '').trim(),
+      joined_date: teacherData.joinedDate || new Date().toISOString().split('T')[0],
+      assigned_class_ids: teacherData.assignedClassIds || [],
+      assigned_subject_ids: teacherData.assignedSubjectIds || [],
+    });
+    const savedTeacher = this._mapTeacherFromApi(response);
+    const teachers = this.getTeachers().filter(teacher => teacher.id !== id && teacher.id !== savedTeacher.id);
+    teachers.push(savedTeacher);
     Storage.set(Storage.KEYS.TEACHERS, teachers);
-    return true;
+    const listRefreshed = await this._refreshTeachersAfterMutation();
+    return { ...savedTeacher, refreshWarning: !listRefreshed };
+  },
+
+  async deleteTeacher(id) {
+    if (!API.hasToken()) {
+      throw new Error('A backend login is required to delete teachers. Please sign in again.');
+    }
+    await API.teachers.delete(id);
+    const teachers = this.getTeachers().filter(teacher => teacher.id !== id);
+    Storage.set(Storage.KEYS.TEACHERS, teachers);
+    const listRefreshed = await this._refreshTeachersAfterMutation();
+    return { success: true, refreshWarning: !listRefreshed };
   },
 
   // --- ATTENDANCE ---
@@ -846,37 +962,99 @@ export const Data = {
   },
 
   // --- FEES & PAYMENTS ---
+  /**
+   * Returns CONFIRMED payments only.
+   * PENDING and FAILED payments are excluded from all balance calculations and ledger views.
+   * To show all payments including pending/failed, use getAllPayments().
+   */
   getPayments(filters = {}) {
     const user = this._getActiveSessionUser();
     if (user && !Permissions.canAccessFinances(user)) return [];
-    let payments = Storage.get(Storage.KEYS.PAYMENTS, []);
-    if (filters.studentId) payments = payments.filter(p => p.studentId === filters.studentId);
-    if (filters.feeCategory) payments = payments.filter(p => p.feeCategory === filters.feeCategory);
-    if (filters.month) payments = payments.filter(p => p.month === filters.month);
-    if (filters.startDate) payments = payments.filter(p => p.paymentDate >= filters.startDate);
-    if (filters.endDate) payments = payments.filter(p => p.paymentDate <= filters.endDate);
-    return payments;
+    return PaymentSyncEngine.getConfirmedPayments(filters);
   },
 
-  recordPayment(paymentData) {
-    if (!this._checkPermission('payments', 'add')) return null;
-    const payments = Storage.get(Storage.KEYS.PAYMENTS, []);
-    const newPayment = {
-      id: Storage.uuid('pay'),
-      studentId: paymentData.studentId,
-      feeCategory: paymentData.feeCategory, // 'Class Fee' or 'School Fee'
-      month: paymentData.month,
-      amountDue: parseFloat(paymentData.amountDue),
-      amountPaid: parseFloat(paymentData.amountPaid),
-      paymentMethod: paymentData.paymentMethod, // 'Cash' | 'ZAAD' | 'eDahab'
-      paymentDate: paymentData.paymentDate || new Date().toISOString().split('T')[0],
-      transactionRef: paymentData.transactionRef ? paymentData.transactionRef.trim() : `TXN-${Date.now().toString().slice(-6)}`,
-      recordedBy: paymentData.recordedBy || 'Administrator',
-      notes: paymentData.notes || ''
-    };
-    payments.unshift(newPayment);
-    Storage.set(Storage.KEYS.PAYMENTS, payments);
-    return newPayment;
+  /**
+   * Returns ALL payments regardless of sync status (for transaction history display).
+   * PENDING payments are tagged syncStatus='PENDING', FAILED payments syncStatus='FAILED'.
+   */
+  getAllPayments(filters = {}) {
+    const user = this._getActiveSessionUser();
+    if (user && !Permissions.canAccessFinances(user)) return [];
+    return PaymentSyncEngine.getAllPayments(filters);
+  },
+
+  getInvoices(studentId = null) {
+    const user = this._getActiveSessionUser();
+    if (user && !Permissions.canAccessFinances(user)) return [];
+    const invoices = Storage.get(Storage.KEYS.INVOICES, []);
+    if (studentId) return invoices.filter(inv => inv.student === studentId || inv.student_id === studentId || inv.studentId === studentId);
+    return invoices;
+  },
+
+  getFeeStructures() {
+    const user = this._getActiveSessionUser();
+    if (user && !Permissions.canAccessFinances(user)) return [];
+    return Storage.get(Storage.KEYS.FEE_STRUCTURES, []);
+  },
+
+  async reversePayment(paymentId, reason) {
+    if (!this._checkPermission('payments', 'edit')) return null;
+    if (API && API.hasToken()) {
+      try {
+        const rev = await API.finances.payments.reverse(paymentId, reason);
+        await this.syncFromBackend();
+        return rev;
+      } catch (err) {
+        console.warn('API reverse payment failed:', err);
+        throw err;
+      }
+    }
+    return null;
+  },
+
+  async refundPayment(paymentId, amount, reason) {
+    if (!this._checkPermission('payments', 'edit')) return null;
+    if (API && API.hasToken()) {
+      try {
+        const ref = await API.finances.payments.refund(paymentId, amount, reason);
+        await this.syncFromBackend();
+        return ref;
+      } catch (err) {
+        console.warn('API refund payment failed:', err);
+        throw err;
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Records a payment via the PaymentSyncEngine.
+   *
+   * Returns { localRecord, confirmationPromise }.
+   * - localRecord is immediately available with syncStatus=PENDING.
+   * - confirmationPromise resolves to the CONFIRMED record once the backend responds.
+   * - On backend rejection, the promise rejects and the local record is marked FAILED.
+   *
+   * IMPORTANT: Only call this via PaymentsView which awaits confirmationPromise before
+   * showing success toast or receipt modal.
+   */
+  async recordPayment(paymentData) {
+    if (!this._checkPermission('payments', 'add')) {
+      throw new Error('You do not have permission to record payments.');
+    }
+    if (!paymentData.idempotencyKey) {
+      paymentData.idempotencyKey = Storage.uuid('idem');
+    }
+    return PaymentSyncEngine.submitPayment(paymentData);
+  },
+
+  /**
+   * Recovers any PENDING payments from a previous session.
+   * Called by app.js after login/session refresh.
+   */
+  async recoverPendingPayments() {
+    if (!this._checkPermission('payments', 'add')) return [];
+    return PaymentSyncEngine.recoverPending();
   },
 
   // --- INCOME & EXPENSES MANAGEMENT (ADMIN ONLY) ---
@@ -1047,7 +1225,18 @@ export const Data = {
     const expenses = this.getExpenses(filters);
 
     // Strictly prevent double-counting: studentFeeCollections comes from payments, otherIncome comes from incomes
-    const studentFeeCollections = payments.reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+    // Reversals and refunds are deducted in accordance with Stage 3.7 & Stage 3.9 financial rules
+    const grossPayments = payments
+      .filter(p => !p.transactionType || p.transactionType.toUpperCase() === 'PAYMENT')
+      .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+    const totalReversals = payments
+      .filter(p => p.transactionType && p.transactionType.toUpperCase() === 'REVERSAL')
+      .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+    const totalRefunds = payments
+      .filter(p => p.transactionType && p.transactionType.toUpperCase() === 'REFUND')
+      .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+    const studentFeeCollections = Math.max(0, grossPayments - totalReversals - totalRefunds);
+
     const otherIncome = incomes.reduce((sum, i) => sum + (parseFloat(i.amount) || 0), 0);
     const totalIncome = studentFeeCollections + otherIncome;
     const totalExpenses = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
@@ -1055,6 +1244,9 @@ export const Data = {
 
     return {
       studentFeeCollections,
+      grossPayments,
+      totalReversals,
+      totalRefunds,
       otherIncome,
       totalIncome,
       totalExpenses,
@@ -1085,15 +1277,23 @@ export const Data = {
       // Filter payments for this student and target month
       const studentPayments = payments.filter(p => p.studentId === student.id && (!targetMonth || p.month === targetMonth));
 
-      // Class fee payments
-      const classFeePaid = studentPayments
-        .filter(p => p.feeCategory === 'Class Fee')
-        .reduce((sum, p) => sum + p.amountPaid, 0);
+      // Class fee payments (net of reversals and refunds)
+      const classFeeGross = studentPayments
+        .filter(p => p.feeCategory === 'Class Fee' && (!p.transactionType || p.transactionType.toUpperCase() === 'PAYMENT'))
+        .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+      const classFeeDeductions = studentPayments
+        .filter(p => p.feeCategory === 'Class Fee' && p.transactionType && (p.transactionType.toUpperCase() === 'REVERSAL' || p.transactionType.toUpperCase() === 'REFUND'))
+        .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+      const classFeePaid = Math.max(0, classFeeGross - classFeeDeductions);
 
-      // School fee payments
-      const schoolFeePaid = studentPayments
-        .filter(p => p.feeCategory === 'School Fee')
-        .reduce((sum, p) => sum + p.amountPaid, 0);
+      // School fee payments (net of reversals and refunds)
+      const schoolFeeGross = studentPayments
+        .filter(p => p.feeCategory === 'School Fee' && (!p.transactionType || p.transactionType.toUpperCase() === 'PAYMENT'))
+        .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+      const schoolFeeDeductions = studentPayments
+        .filter(p => p.feeCategory === 'School Fee' && p.transactionType && (p.transactionType.toUpperCase() === 'REVERSAL' || p.transactionType.toUpperCase() === 'REFUND'))
+        .reduce((sum, p) => sum + (parseFloat(p.amountPaid) || 0), 0);
+      const schoolFeePaid = Math.max(0, schoolFeeGross - schoolFeeDeductions);
 
       const totalPaid = classFeePaid + schoolFeePaid;
       const outstanding = Math.max(0, totalObligation - totalPaid);
@@ -1223,6 +1423,9 @@ export const Data = {
     const current = this.getSettings();
     const updated = { ...current, ...newSettings };
     Storage.set(Storage.KEYS.SETTINGS, updated);
+    if (API && API.hasToken()) {
+      API.settings.patch(newSettings).catch(err => console.warn('Sync settings patch error:', err));
+    }
     return updated;
   },
 
@@ -1247,7 +1450,7 @@ export const Data = {
     const totalAttendanceRecorded = todayAttendance.length;
     const attendancePercentage = totalAttendanceRecorded > 0 
       ? Math.round((presentCount / totalAttendanceRecorded) * 100) 
-      : 96; // reasonable baseline if today not fully taken yet
+      : 0; // 0% if no attendance taken today (never fictitious baseline)
 
     // Fees calculations
     const monthlyFeesCollected = ledger.reduce((sum, item) => sum + item.totalPaid, 0);
@@ -1280,5 +1483,209 @@ export const Data = {
       recentTransactions: [...payments].slice(0, 5),
       recentAttendance: [...todayAttendance].reverse().slice(0, 5)
     };
+  },
+
+  async syncFromBackend() {
+    if (!API || !API.hasToken()) return false;
+    try {
+      // 1. Settings
+      try {
+        const settings = await API.settings.get();
+        if (settings && typeof settings === 'object') {
+          Storage.set(Storage.KEYS.SETTINGS, { ...Storage.get(Storage.KEYS.SETTINGS, {}), ...settings });
+        }
+      } catch (err) {
+        // Continue if module fails
+      }
+
+      // 2. Classes
+      try {
+        const classesRes = await API.classes.list();
+        const classes = Array.isArray(classesRes) ? classesRes : (classesRes.results || []);
+        const mapped = classes.map(c => ({
+          id: c.id,
+          name: c.name,
+          section: c.section || 'A',
+          room: c.room || '',
+          capacity: c.capacity || 30,
+          teacherId: c.teacher || c.teacher_id || c.teacherId || '',
+          academicYear: c.academic_year || c.academicYear || '2026-2027',
+          status: c.status || 'ACTIVE'
+        }));
+        Storage.set(Storage.KEYS.CLASSES, mapped);
+      } catch (err) {}
+
+      // 3. Subjects
+      try {
+        await this.syncSubjectsFromBackend();
+      } catch (err) {
+        console.warn('Could not load subjects from the backend:', err);
+      }
+
+      // 4. Teachers
+      try {
+        await this.syncTeachersFromBackend();
+      } catch (err) {
+        console.warn('Could not load teachers from the backend:', err);
+      }
+
+      // 5. Students
+      try {
+        const studentsRes = await API.students.list();
+        const students = Array.isArray(studentsRes) ? studentsRes : (studentsRes.results || []);
+        const mapped = students.map(s => ({
+          id: s.id,
+          admissionNumber: s.admission_number || s.studentId || s.id,
+          fullName: s.full_name || s.fullName || '',
+          gender: s.gender || 'Male',
+          dateOfBirth: s.date_of_birth || s.dateOfBirth || '',
+          parentPhone: s.parent_phone || s.parentPhone || '',
+          classId: s.classroom || s.classId || s.classroom_id || '',
+          registrationDate: s.registration_date || s.registrationDate || '',
+          status: s.status || 'Active'
+        }));
+        Storage.set(Storage.KEYS.STUDENTS, mapped);
+      } catch (err) {
+        console.warn('Could not load students from the backend:', err);
+      }
+
+      // 6. Attendance (Stage 3.9)
+      try {
+        const attRes = await API.attendance.list();
+        const attList = Array.isArray(attRes) ? attRes : (attRes.results || []);
+        const mapped = attList.map(a => ({
+          id: a.id,
+          studentId: a.studentId || a.student || a.student_id,
+          classId: a.classId || a.classroom || a.classroom_id,
+          date: a.date,
+          status: a.status,
+          excusedReason: a.excusedReason || a.excused_reason || ''
+        }));
+        Storage.set(Storage.KEYS.ATTENDANCE, mapped);
+      } catch (err) {}
+
+      // 7. Examinations (Stage 3.9)
+      try {
+        const examRes = await API.examinations.list();
+        const examList = Array.isArray(examRes) ? examRes : (examRes.results || []);
+        const mapped = examList.map(e => {
+          const marks = {};
+          (Array.isArray(e.marks) ? e.marks : []).forEach(mark => {
+            const studentId = mark.studentId || mark.student || mark.student_id;
+            const subjectId = mark.subjectId || mark.subject || mark.subject_id;
+            if (!studentId || !subjectId) return;
+            marks[studentId] ||= {};
+            marks[studentId][subjectId] = Number(mark.score);
+          });
+          return {
+            id: e.id,
+            classId: e.classId || e.classroom || e.classroom_id,
+            examType: e.examType || e.exam_type,
+            academicYear: e.academicYear || e.academic_year,
+            term: e.term,
+            recordedDate: e.recordedDate || e.recorded_date,
+            marks
+          };
+        });
+        Storage.set(Storage.KEYS.EXAMINATIONS, mapped);
+      } catch (err) {}
+
+      // 8. Finances (if authorized)
+      const user = this._getActiveSessionUser();
+      if (!user || Permissions.canAccessFinances(user)) {
+        try {
+          const invoicesRes = await API.finances.invoices.list();
+          const invoices = Array.isArray(invoicesRes) ? invoicesRes : (invoicesRes.results || []);
+          Storage.set(Storage.KEYS.INVOICES, invoices);
+        } catch (e) {}
+
+        try {
+          const feeRes = await API.finances.feeStructures.list();
+          const fees = Array.isArray(feeRes) ? feeRes : (feeRes.results || []);
+          Storage.set(Storage.KEYS.FEE_STRUCTURES, fees);
+        } catch (e) {}
+
+        try {
+          const paymentsRes = await API.finances.payments.list();
+          const payments = Array.isArray(paymentsRes) ? paymentsRes : (paymentsRes.results || []);
+          if (payments.length > 0) {
+            const mapped = payments.map(p => ({
+              id: p.id,
+              studentId: p.student || p.student_id || p.studentId,
+              feeCategory: p.fee_category || p.feeCategory || 'Tuition Fee',
+              month: p.month || '',
+              amountDue: parseFloat(p.amount_due || 0),
+              amountPaid: parseFloat(p.amount_paid || p.amountPaid || p.amount || 0),
+              paymentMethod: p.payment_method || p.paymentMethod || 'Cash',
+              paymentDate: p.payment_date || p.paymentDate || '',
+              transactionRef: p.transaction_ref || p.receipt_number || '',
+              receiptNumber: p.receipt_number || '',
+              invoiceId: p.invoice || p.invoice_id || null,
+              transactionType: p.transaction_type || 'PAYMENT',
+              syncStatus: p.sync_status || 'CONFIRMED',
+              recordedBy: p.recorded_by_name || p.recordedBy || 'Administrator',
+              notes: p.notes || ''
+            }));
+            Storage.set(Storage.KEYS.PAYMENTS, mapped);
+          }
+        } catch (e) {}
+
+        try {
+          const incomesRes = await API.finances.incomes.list();
+          const incomes = Array.isArray(incomesRes) ? incomesRes : (incomesRes.results || []);
+          if (incomes.length > 0) {
+            const mapped = incomes.map(i => ({
+              id: i.id,
+              title: i.title,
+              category: i.category,
+              description: i.description,
+              amount: parseFloat(i.amount || 0),
+              paymentMethod: i.payment_method || i.paymentMethod || 'Cash',
+              date: i.date,
+              referenceNumber: i.reference_number || i.referenceNumber || '',
+              notes: i.notes || '',
+              createdAt: i.created_at || ''
+            }));
+            Storage.set(Storage.KEYS.INCOMES, mapped);
+          }
+        } catch (e) {}
+
+        try {
+          const expensesRes = await API.finances.expenses.list();
+          const expenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.results || []);
+          if (expenses.length > 0) {
+            const mapped = expenses.map(e => ({
+              id: e.id,
+              title: e.title,
+              category: e.category,
+              description: e.description,
+              amount: parseFloat(e.amount || 0),
+              paymentMethod: e.payment_method || e.paymentMethod || 'Cash',
+              date: e.date,
+              referenceNumber: e.reference_number || e.referenceNumber || '',
+              notes: e.notes || '',
+              createdAt: e.created_at || ''
+            }));
+            Storage.set(Storage.KEYS.EXPENSES, mapped);
+          }
+        } catch (e) {}
+      }
+
+      // 7. Users (Admin only)
+      if (user && Permissions.isAdmin(user)) {
+        try {
+          const usersRes = await API.users.list();
+          const users = Array.isArray(usersRes) ? usersRes : (usersRes.results || []);
+          if (users.length > 0) {
+            Storage.set(Storage.KEYS.USERS, users);
+          }
+        } catch (e) {}
+      }
+
+      return true;
+    } catch (err) {
+      console.warn('syncFromBackend caught exception:', err);
+      return false;
+    }
   }
 };

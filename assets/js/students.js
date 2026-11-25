@@ -11,6 +11,7 @@ import { Permissions } from './permissions.js';
 import { Components } from './components.js';
 import { I18n } from './i18n.js';
 import { StudentImport } from './student-import.js';
+import { API } from './api.js';
 
 let currentSearch = '';
 let currentClassFilter = '';
@@ -38,7 +39,7 @@ export const StudentsView = {
     const filtered = baseStudents.filter(s => {
       const matchSearch = !currentSearch || 
         s.fullName.toLowerCase().includes(currentSearch.toLowerCase()) ||
-        s.id.toLowerCase().includes(currentSearch.toLowerCase()) ||
+        String(s.admissionNumber || s.id).toLowerCase().includes(currentSearch.toLowerCase()) ||
         s.parentPhone.includes(currentSearch);
       
       const matchClass = !currentClassFilter || s.classId === currentClassFilter;
@@ -140,7 +141,7 @@ export const StudentsView = {
                   const cls = classes.find(c => c.id === student.classId);
                   return `
                     <tr class="hover:bg-slate-50/80 transition-colors">
-                      <td class="py-3 px-4 font-mono font-medium text-blue-600">${student.id}</td>
+                      <td class="py-3 px-4 font-mono font-medium text-blue-600">${student.admissionNumber || student.id}</td>
                       <td class="py-3 px-4 font-semibold text-slate-900">${student.fullName}</td>
                       <td class="py-3 px-4">
                         <span class="inline-block px-2 py-0.5 rounded text-[11px] font-medium ${student.gender === 'Female' ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-blue-700'}">
@@ -286,7 +287,13 @@ export const StudentsView = {
   openStudentModal(existingStudent = null, parentContainer) {
     const isEdit = !!existingStudent;
     const classes = Data.getClasses();
-    const autoId = isEdit ? existingStudent.id : Storage.generateNextStudentId();
+    if (!isEdit && classes.length === 0) {
+      Components.showToast('No classes are available from the backend. Create a class before registering a student.', 'error', 5000);
+      return;
+    }
+    const autoId = isEdit
+      ? (existingStudent.admissionNumber || existingStudent.id)
+      : Storage.generateNextStudentId();
     const today = new Date().toISOString().split('T')[0];
 
     const content = `
@@ -382,9 +389,20 @@ export const StudentsView = {
 
     document.getElementById('modal-cancel').addEventListener('click', () => Components.closeModal());
 
-    document.getElementById('student-form').addEventListener('submit', (e) => {
+    if (!isEdit && API.hasToken()) {
+      API.students.nextId().then(result => {
+        const idInput = document.querySelector('#student-form [name="id"]');
+        if (idInput && result.nextId) idInput.value = result.nextId;
+      }).catch(error => {
+        console.warn('Could not retrieve the next student admission number:', error);
+      });
+    }
+
+    document.getElementById('student-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
+      const submitButton = form.querySelector('button[type="submit"]');
+      const originalButtonText = submitButton ? submitButton.innerHTML : '';
       const formData = new FormData(form);
 
       const studentPayload = {
@@ -397,16 +415,28 @@ export const StudentsView = {
         registrationDate: formData.get('registrationDate')
       };
 
-      if (isEdit) {
-        Data.updateStudent(existingStudent.id, studentPayload);
-        Components.showToast(`Updated student ${studentPayload.fullName}.`, 'success');
-      } else {
-        Data.addStudent(studentPayload);
-        Components.showToast(`Registered student ${studentPayload.fullName}.`, 'success');
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = isEdit ? 'Saving…' : 'Registering…';
       }
+      try {
+        if (isEdit) {
+          Data.updateStudent(existingStudent.id, studentPayload);
+          Components.showToast(`Updated student ${studentPayload.fullName}.`, 'success');
+        } else {
+          await Data.addStudent(studentPayload);
+          Components.showToast(`Registered student ${studentPayload.fullName}.`, 'success');
+        }
 
-      Components.closeModal();
-      this.render(parentContainer);
+        Components.closeModal();
+        this.render(parentContainer);
+      } catch (error) {
+        Components.showToast(`Student registration failed: ${error.message || 'The backend could not save this record.'}`, 'error', 6000);
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.innerHTML = originalButtonText;
+        }
+      }
     });
   },
 
@@ -487,7 +517,7 @@ export const StudentsView = {
             <div>
               <span class="text-[10px] font-bold uppercase tracking-wider text-amber-600 block">MADARASATUL AL-IMAAM</span>
               <h2 class="text-base font-bold text-slate-900">${student.fullName}</h2>
-              <p class="text-xs text-slate-500 font-mono">ID: ${student.id} · ${currentClass ? currentClass.name : 'Unassigned'} · ${student.registrationDate}</p>
+              <p class="text-xs text-slate-500 font-mono">ID: ${student.admissionNumber || student.id} · ${currentClass ? currentClass.name : 'Unassigned'} · ${student.registrationDate}</p>
             </div>
           </div>
           <span class="inline-block px-2.5 py-1 text-xs font-semibold rounded-md ${student.gender === 'Female' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}">
@@ -713,7 +743,7 @@ export const StudentsView = {
     const rows = students.map(s => {
       const cls = classes.find(c => c.id === s.classId);
       return [
-        `"${s.id}"`,
+        `"${s.admissionNumber || s.id}"`,
         `"${s.fullName.replace(/"/g, '""')}"`,
         `"${s.gender}"`,
         `"${s.dateOfBirth}"`,

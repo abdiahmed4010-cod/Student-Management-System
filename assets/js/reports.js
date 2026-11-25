@@ -41,7 +41,7 @@ const CATEGORY_DEFINITIONS = [
     description: 'View complete student lists, class rosters, and individual student profiles.',
     defaultSub: 'all',
     subReports: [
-      { id: 'all', label: 'Complete Student List' },
+      { id: 'all', label: 'Complete Student List', adminOnly: true },
       { id: 'by-class', label: 'Class Student List' },
       { id: 'individual', label: 'Individual Student Report' }
     ]
@@ -91,7 +91,7 @@ const CATEGORY_DEFINITIONS = [
     defaultSub: 'class-results',
     subReports: [
       { id: 'class-results', label: 'Class Results' },
-      { id: 'class-ranking', label: 'Student Ranking' },
+      { id: 'class-ranking', label: 'Student Ranking', adminOnly: true },
       { id: 'individual', label: 'Individual Student Results' }
     ]
   },
@@ -221,8 +221,12 @@ export const ReportsView = {
       selectedCategory = availableCategories[0].id;
     }
     const activeCatDef = availableCategories.find(c => c.id === selectedCategory);
-    if (!activeCatDef.subReports.some(sr => sr.id === selectedSubReport)) {
-      selectedSubReport = activeCatDef.defaultSub;
+    // Filter permitted sub-reports for this user (Stage 3.9 RBAC Sub-Report Security)
+    const permittedSubReports = activeCatDef.subReports.filter(sr =>
+      Permissions.canAccessSubReport(user, selectedCategory, sr.id)
+    );
+    if (!permittedSubReports.some(sr => sr.id === selectedSubReport)) {
+      selectedSubReport = permittedSubReports.length > 0 ? permittedSubReports[0].id : activeCatDef.defaultSub;
     }
 
     // Validate selected class and student against permitted scope
@@ -271,6 +275,9 @@ export const ReportsView = {
             ${canExport ? `
               <button id="export-excel-btn" class="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-900 bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 rounded-lg transition-colors">
                 ${Components.icon('download', 'w-4 h-4 text-emerald-600')} Export Excel (.xlsx)
+              </button>
+              <button id="export-csv-btn" class="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-900 bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 rounded-lg transition-colors">
+                ${Components.icon('file-spreadsheet', 'w-4 h-4 text-emerald-700')} Export CSV
               </button>
             ` : ''}
             ${canPrint ? `
@@ -325,11 +332,11 @@ export const ReportsView = {
             </div>
           </div>
 
-          ${activeCatDef.subReports.length > 1 ? `
+          ${permittedSubReports.length > 1 ? `
             <div>
               <span class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Choose Report View</span>
               <div class="flex flex-wrap gap-1.5">
-                ${activeCatDef.subReports.map(sr => `
+                ${permittedSubReports.map(sr => `
                   <button
                     class="report-sub-tab px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
                       selectedSubReport === sr.id
@@ -701,15 +708,15 @@ export const ReportsView = {
 
   generateReportData(user, availableClasses, scopedStudents) {
     // Enforce backend/permission guard before computing any report dataset
-    if (!Permissions.canAccessReport(user, selectedCategory)) {
+    if (!Permissions.canAccessReport(user, selectedCategory) || !Permissions.canAccessSubReport(user, selectedCategory, selectedSubReport)) {
       return {
         title: 'Access Restricted',
         academicPeriod: '',
-        filterDescription: 'Unauthorized report category',
+        filterDescription: 'Unauthorized report category or sub-report view',
         headers: [{ label: 'Status', align: 'left' }],
         rows: [],
         exportRows: [],
-        emptyMessage: 'You do not have permission to access this report.'
+        emptyMessage: 'You do not have permission to access this report view.'
       };
     }
 
@@ -2030,12 +2037,17 @@ export const ReportsView = {
         const incomeRows = [
           ...payments.map(p => {
             const st = Data.getStudentById(p.studentId);
+            const isReversal = p.transactionType && p.transactionType.toUpperCase() === 'REVERSAL';
+            const isRefund = p.transactionType && p.transactionType.toUpperCase() === 'REFUND';
+            const isDeduction = isReversal || isRefund;
+            const sourceLabel = isReversal ? 'Fee Reversal' : (isRefund ? 'Fee Refund' : 'Student Fee Collection');
+            const rawAmt = parseFloat(p.amountPaid) || 0;
             return {
               date: p.paymentDate || '',
-              source: 'Student Fee Collection',
-              description: `${st ? st.fullName : p.studentId} (${p.month})`,
+              source: sourceLabel,
+              description: `${st ? st.fullName : p.studentId} (${p.month || '—'})${isDeduction ? ` · ${p.reversalReason || 'Deduction'}` : ''}`,
               category: p.feeCategory || 'School Fee',
-              amount: parseFloat(p.amountPaid) || 0,
+              amount: isDeduction ? -rawAmt : rawAmt,
               method: p.paymentMethod || 'Cash'
             };
           }),
@@ -2094,10 +2106,10 @@ export const ReportsView = {
           ],
           rows: incomeRows.map(t => [
             t.date || '—',
-            `<span class="font-semibold text-blue-800">${t.source}</span>`,
+            `<span class="font-semibold ${t.amount < 0 ? 'text-rose-700' : 'text-blue-800'}">${t.source}</span>`,
             t.description,
             t.category,
-            `<span class="font-bold text-emerald-700">+${currency}${t.amount.toFixed(2)}</span>`,
+            `<span class="font-bold ${t.amount < 0 ? 'text-rose-700' : 'text-emerald-700'}">${t.amount < 0 ? '-' : '+'}${currency}${Math.abs(t.amount).toFixed(2)}</span>`,
             t.method
           ]),
           exportRows: incomeRows.map(t => [
@@ -2206,12 +2218,17 @@ export const ReportsView = {
       const allTransactions = [
         ...payments.map(p => {
           const st = Data.getStudentById(p.studentId);
+          const isReversal = p.transactionType && p.transactionType.toUpperCase() === 'REVERSAL';
+          const isRefund = p.transactionType && p.transactionType.toUpperCase() === 'REFUND';
+          const isDeduction = isReversal || isRefund;
+          const typeLabel = isReversal ? 'Fee Reversal' : (isRefund ? 'Fee Refund' : 'Student Fee Collection');
+          const rawAmt = parseFloat(p.amountPaid) || 0;
           return {
             date: p.paymentDate || '',
-            type: 'Student Fee Collection',
-            description: `${st ? st.fullName : p.studentId} (${p.month})`,
+            type: typeLabel,
+            description: `${st ? st.fullName : p.studentId} (${p.month || '—'})${isDeduction ? ` · ${p.reversalReason || 'Deduction'}` : ''}`,
             category: p.feeCategory || 'School Fee',
-            amount: parseFloat(p.amountPaid) || 0,
+            amount: isDeduction ? -rawAmt : rawAmt,
             method: p.paymentMethod || 'Cash'
           };
         }),
@@ -2235,10 +2252,10 @@ export const ReportsView = {
 
       const rows = allTransactions.map(t => [
         t.date || '—',
-        `<span class="font-semibold ${t.type === 'Expense' ? 'text-rose-700' : 'text-emerald-700'}">${t.type}</span>`,
+        `<span class="font-semibold ${t.type === 'Expense' || t.amount < 0 ? 'text-rose-700' : 'text-emerald-700'}">${t.type}</span>`,
         t.description,
         t.category,
-        `<span class="font-bold ${t.type === 'Expense' ? 'text-rose-700' : 'text-emerald-700'}">${t.type === 'Expense' ? '-' : '+'}${currency}${t.amount.toFixed(2)}</span>`,
+        `<span class="font-bold ${t.type === 'Expense' || t.amount < 0 ? 'text-rose-700' : 'text-emerald-700'}">${t.type === 'Expense' || t.amount < 0 ? '-' : '+'}${currency}${Math.abs(t.amount).toFixed(2)}</span>`,
         t.method
       ]);
 
@@ -2247,7 +2264,7 @@ export const ReportsView = {
         t.type,
         t.description,
         t.category,
-        t.type === 'Expense' ? parseFloat((-t.amount).toFixed(2)) : parseFloat(t.amount.toFixed(2)),
+        t.type === 'Expense' ? parseFloat((-Math.abs(t.amount)).toFixed(2)) : parseFloat(t.amount.toFixed(2)),
         t.method
       ]);
 
@@ -2320,7 +2337,8 @@ export const ReportsView = {
       tab.addEventListener('click', () => {
         selectedCategory = tab.dataset.cat;
         const catDef = CATEGORY_DEFINITIONS.find(c => c.id === selectedCategory);
-        selectedSubReport = catDef ? catDef.defaultSub : 'all';
+        const permitted = catDef ? catDef.subReports.filter(sr => Permissions.canAccessSubReport(user, selectedCategory, sr.id)) : [];
+        selectedSubReport = permitted.length > 0 ? (permitted.some(sr => sr.id === catDef.defaultSub) ? catDef.defaultSub : permitted[0].id) : (catDef ? catDef.defaultSub : 'all');
         filterStudentId = '';
         filterStudentQuery = '';
         filterExamType = '';
@@ -2332,6 +2350,10 @@ export const ReportsView = {
 
     container.querySelectorAll('.report-sub-tab').forEach(tab => {
       tab.addEventListener('click', () => {
+        if (!Permissions.canAccessSubReport(user, selectedCategory, tab.dataset.sub)) {
+          Components.showToast('Access to that report view is restricted.', 'warning');
+          return;
+        }
         if (selectedSubReport === 'individual' && tab.dataset.sub !== 'individual') {
           filterStudentId = '';
         }
@@ -2457,6 +2479,7 @@ export const ReportsView = {
     const printBtn = container.querySelector('#print-report-btn');
     if (printBtn) {
       printBtn.addEventListener('click', async () => {
+        if (!Permissions.hasPermission(user, 'reports', 'print') || !Permissions.canAccessReport(user, selectedCategory) || !Permissions.canAccessSubReport(user, selectedCategory, selectedSubReport)) return;
         this.syncFiltersFromDOM(container);
         this.render(container);
         if (!activeReportData) return;
@@ -2472,6 +2495,7 @@ export const ReportsView = {
     const pdfBtn = container.querySelector('#export-pdf-btn');
     if (pdfBtn) {
       pdfBtn.addEventListener('click', async () => {
+        if (!Permissions.hasPermission(user, 'reports', 'print') || !Permissions.canAccessReport(user, selectedCategory) || !Permissions.canAccessSubReport(user, selectedCategory, selectedSubReport)) return;
         this.syncFiltersFromDOM(container);
         this.render(container);
         if (!activeReportData) return;
@@ -2499,6 +2523,7 @@ export const ReportsView = {
     const excelBtn = container.querySelector('#export-excel-btn');
     if (excelBtn) {
       excelBtn.addEventListener('click', () => {
+        if (!Permissions.hasPermission(user, 'reports', 'export') || !Permissions.canAccessReport(user, selectedCategory) || !Permissions.canAccessSubReport(user, selectedCategory, selectedSubReport)) return;
         this.syncFiltersFromDOM(container);
         this.render(container);
         if (!activeReportData) return;
@@ -2519,6 +2544,32 @@ export const ReportsView = {
           }
         );
         Components.showToast('Report exported to Excel (.xlsx).', 'success');
+      });
+    }
+
+    const csvBtn = container.querySelector('#export-csv-btn');
+    if (csvBtn) {
+      csvBtn.addEventListener('click', () => {
+        if (!Permissions.hasPermission(user, 'reports', 'export') || !Permissions.canAccessReport(user, selectedCategory) || !Permissions.canAccessSubReport(user, selectedCategory, selectedSubReport)) return;
+        this.syncFiltersFromDOM(container);
+        this.render(container);
+        if (!activeReportData) return;
+        const filename = `MADARASATUL_AL_IMAAM_${selectedCategory}_${selectedSubReport}_${new Date().toISOString().split('T')[0]}.csv`;
+        Components.exportToCSV(
+          filename,
+          activeReportData.headers,
+          activeReportData.exportRows || activeReportData.rows,
+          activeReportData.totals || null,
+          {
+            institutionName: settings.institutionName || 'MADARASATUL AL-IMAAM',
+            systemName: 'AL-IMAAMA',
+            reportTitle: activeReportData.title,
+            academicPeriod: activeReportData.academicPeriod || '',
+            filterDescription: activeReportData.filterDescription || '',
+            generatedDate: new Date().toLocaleDateString()
+          }
+        );
+        Components.showToast('Report exported to CSV.', 'success');
       });
     }
   }

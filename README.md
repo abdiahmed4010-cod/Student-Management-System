@@ -47,6 +47,13 @@ npm run dev
 ```
 Then open **http://localhost:3000** in your web browser.
 
+For backend authentication and live API data, start Django from `backend/` with
+`python manage.py runserver` as well. Vite forwards `/api/v1` requests to
+`http://127.0.0.1:8000` by default; set `VITE_API_PROXY_TARGET` in the Vite
+process environment if Django listens on a different address. Production
+deployments should route `/api/v1` to Django through their web server or hosting
+platform, while the frontend continues to use same-origin API paths.
+
 ### 5. Build & Type-Check for Production
 ```bash
 npm run lint

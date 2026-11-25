@@ -11,7 +11,7 @@
 
 **STUDENTLY** adopts a dual-engine database strategy:
 - **Local Development & Testing:** **SQLite (v3.35+)** — Lightweight, zero-configuration, file-based database for rapid local developer setup.
-- **Production Staging & Live Deployment:** **MySQL (v8.0.16+)** — High-concurrency, enterprise relational engine with row-level locking, foreign key integrity, and ACID guarantees.
+- **Staging Target:** **MySQL 8.4 LTS** (InnoDB) — High-concurrency, enterprise relational engine with row-level locking, foreign key integrity, and ACID guarantees.
 
 This document outlines the database dialect differences, the unified Django configuration pattern, and the step-by-step production migration and verification procedure.
 
@@ -33,62 +33,46 @@ This document outlines the database dialect differences, the unified Django conf
 
 ---
 
-## 3. Unified Django Settings Configuration
+## 3. Django Database Configuration (Stage 3.10.1)
 
-The Django backend dynamically switches database backends using environment variables (via `dj-database-url` or explicit environment toggles):
+The active settings are in `backend/config/settings.py`. SQLite remains the default for local development and tests. Set `DB_ENGINE=mysql` explicitly to select MySQL; the settings then require non-empty `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_PORT`. Missing values, invalid engine names, and invalid option values fail during settings import. MySQL selection never falls back to SQLite.
 
-```python
-# backend/settings.py
-import os
-from pathlib import Path
-import dj_database_url
+The supported staging target is **MySQL 8.4 LTS with InnoDB**. Django 5.2 supports MySQL 8.0.11 and newer; using the project target keeps staging aligned with the selected LTS release. The database must be provisioned with `utf8mb4` and the intended database collation (for example, `utf8mb4_unicode_ci`). The connection uses `utf8mb4`, a strict SQL mode (`STRICT_TRANS_TABLES`, `ERROR_FOR_DIVISION_BY_ZERO`, and `NO_ENGINE_SUBSTITUTION`), and a session default storage engine of InnoDB. These settings do not convert existing tables; their engine, charset, and collation must be verified separately during a later staging exercise.
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+Install the pinned driver from the backend directory:
 
-DB_ENGINE = os.getenv('DB_ENGINE', 'sqlite').lower()
-
-if DB_ENGINE == 'mysql':
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.mysql',
-            'NAME': os.getenv('DB_NAME', 'studently_db'),
-            'USER': os.getenv('DB_USER', 'studently_app'),
-            'PASSWORD': os.getenv('DB_PASSWORD', ''),
-            'HOST': os.getenv('DB_HOST', 'localhost'),
-            'PORT': os.getenv('DB_PORT', '3306'),
-            'OPTIONS': {
-                'charset': 'utf8mb4',
-                'collation': 'utf8mb4_unicode_ci',
-                'init_command': (
-                    "SET sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,"
-                    "NO_ENGINE_SUBSTITUTION';"
-                    "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;"
-                ),
-            },
-            'CONN_MAX_AGE': 300, # 5 minutes connection persistence
-        }
-    }
-else:
-    # Default local development SQLite configuration
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
-
-# Enable SQLite Foreign Key Enforcement automatically
-if 'sqlite3' in DATABASES['default']['ENGINE']:
-    from django.db.backends.signals import connection_created
-    def enable_sqlite_fk(sender, connection, **kwargs):
-        cursor = connection.cursor()
-        cursor.execute('PRAGMA foreign_keys = ON;')
-    connection_created.connect(enable_sqlite_fk)
+```powershell
+python -m pip install -r requirements.txt
 ```
+
+`mysqlclient==2.3.2` is the sole MySQL DB-API driver. The connection lifetime is configured by `DB_CONN_MAX_AGE` (default `60` seconds). Isolation is configured by `DB_ISOLATION_LEVEL` (default `read committed`; allowed values are `read uncommitted`, `read committed`, `repeatable read`, and `serializable`). Django recommends `read committed` for MySQL. These defaults are settings behavior; they are not evidence of a successful server connection.
+
+The environment variable names are:
+
+| Variable | Purpose | Default / requirement |
+| --- | --- | --- |
+| `DB_ENGINE` | Explicit backend selector | `sqlite` by default; set to `mysql` to select MySQL |
+| `DB_NAME` | MySQL database name | Required for MySQL |
+| `DB_USER` | MySQL username | Required for MySQL |
+| `DB_PASSWORD` | MySQL password | Required and non-empty for MySQL; keep in an untracked `.env` or secret store |
+| `DB_HOST` | MySQL host | Required for MySQL |
+| `DB_PORT` | MySQL TCP port | Required integer from 1 to 65535 |
+| `DB_CONN_MAX_AGE` | Persistent connection lifetime in seconds | `60`; non-negative integer |
+| `DB_CHARSET` | Client/session charset | `utf8mb4` only |
+| `DB_COLLATION` | Client session collation | `utf8mb4_unicode_ci` by default; `utf8mb4_0900_ai_ci` is also accepted |
+| `DB_ISOLATION_LEVEL` | MySQL transaction isolation | `read committed` by default; four standard levels are accepted |
+
+To verify a connection, first confirm that `DB_ENGINE=mysql` and all credentials point to an explicitly non-production staging database. Then use a read-only query such as:
+
+```powershell
+python manage.py shell -c "from django.db import connection; connection.ensure_connection(); cursor = connection.cursor(); cursor.execute('SELECT 1'); print(cursor.fetchone())"
+```
+
+This check authenticates the connection and executes only `SELECT 1`; it does not create a schema or apply migrations. Do not use production credentials for a verification check. No MySQL connection check or migration is implied by this configuration documentation.
 
 ---
 
-## 4. Production MySQL 8.0 Provisioning & Least-Privilege Security
+## 4. MySQL 8.4 Provisioning & Least-Privilege Security
 
 In strict adherence to the **Principle of Least Privilege**, production database access is divided into dedicated, role-segregated database accounts. Under no circumstances does the runtime web application receive administrative or DDL privileges.
 

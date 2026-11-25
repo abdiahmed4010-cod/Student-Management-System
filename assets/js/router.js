@@ -141,8 +141,18 @@ export const Router = {
         }
       } else if (hash === 'reports') {
         const reqCat = params.get('category');
+        const reqSub = params.get('sub');
         if (reqCat && !Permissions.canAccessReport(user, reqCat)) {
+          const contentArea = document.getElementById('main-content-viewport');
+          if (contentArea) contentArea.innerHTML = '';
           Components.showToast('Access denied: You do not have permission to view that report category.', 'warning', 3500);
+          this.navigate('dashboard');
+          return;
+        }
+        if (reqCat && reqSub && !Permissions.canAccessSubReport(user, reqCat, reqSub)) {
+          const contentArea = document.getElementById('main-content-viewport');
+          if (contentArea) contentArea.innerHTML = '';
+          Components.showToast('Access denied: You do not have permission to view that report view.', 'warning', 3500);
           this.navigate('dashboard');
           return;
         }
@@ -527,8 +537,8 @@ export const Router = {
         title: I18n.t('common.logout', 'Sign Out Session'),
         message: 'Are you sure you want to end your current session?',
         confirmText: I18n.t('common.logout', 'Sign Out'),
-        onConfirm: () => {
-          Auth.logout();
+        onConfirm: async () => {
+          await Auth.logout();
           Components.showToast('You have signed out successfully.', 'info');
           this.navigate('login');
         }
@@ -804,10 +814,10 @@ export const Router = {
         </div>
       `;
 
-      document.getElementById('forgot-form').addEventListener('submit', (e) => {
+      document.getElementById('forgot-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const email = document.getElementById('forgot-email').value;
-        const res = Auth.requestPasswordReset(email);
+        const res = await Auth.requestPasswordReset(email);
         const statusBox = document.getElementById('forgot-status');
         statusBox.classList.remove('hidden');
         if (res.success) {
@@ -989,22 +999,45 @@ export const Router = {
     // Login submit
     const loginForm = document.getElementById('login-form');
     if (loginForm) {
-      loginForm.addEventListener('submit', (e) => {
+      loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const submitBtn = loginForm.querySelector('button[type="submit"]');
+        const origText = submitBtn ? submitBtn.innerHTML : '';
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '<span class="inline-block animate-spin mr-2">⟳</span> Signing in...';
+        }
+
         const email = emailInput.value;
         const pass = passInput.value;
         const remember = document.getElementById('remember-me').checked;
-
-        const res = Auth.login(email, pass, remember);
         const errBox = document.getElementById('login-error-msg');
 
-        if (res.success) {
-          errBox.classList.add('hidden');
-          Components.showToast(`Signed in as ${res.user.fullName} (${res.user.role})`, 'success');
-          this.navigate('dashboard');
-        } else {
-          errBox.classList.remove('hidden');
-          errBox.textContent = res.error;
+        try {
+          const res = await Auth.login(email, pass, remember);
+          if (res.success) {
+            if (errBox) errBox.classList.add('hidden');
+            Components.showToast(`Signed in as ${res.user.fullName} (${res.user.role})`, 'success');
+            if (window.Data && typeof Data.syncFromBackend === 'function') {
+              Data.syncFromBackend().catch(err => console.warn('Background sync warning:', err));
+            }
+            this.navigate('dashboard');
+          } else {
+            if (errBox) {
+              errBox.classList.remove('hidden');
+              errBox.textContent = res.error || 'Authentication failed';
+            }
+          }
+        } catch (err) {
+          if (errBox) {
+            errBox.classList.remove('hidden');
+            errBox.textContent = err.message || 'An unexpected error occurred during sign in.';
+          }
+        } finally {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = origText;
+          }
         }
       });
     }

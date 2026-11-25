@@ -151,13 +151,23 @@ export const SubjectsView = {
           message: `Are you sure you want to remove <strong>${sub.name}</strong>? This subject column will no longer appear in future exam spreadsheets for this class.`,
           confirmText: 'Delete Subject',
           isDestructive: true,
-          onConfirm: () => {
-            const res = Data.deleteSubject(sub.id);
-            if (res && res.success === false) {
-              Components.showToast(res.reason || 'Cannot delete subject because marks exist.', 'warning', 4500);
-            } else {
-              Components.showToast(`Subject ${sub.name} deleted successfully.`, 'success');
-              this.render(container);
+          onConfirm: async () => {
+            try {
+              const res = await Data.deleteSubject(sub.id);
+              if (res && res.success === false) {
+                Components.showToast(res.reason || 'Cannot delete subject because marks exist.', 'warning', 4500);
+              } else {
+                Components.showToast(
+                  res.refreshWarning
+                    ? `Subject ${sub.name} was deleted, but the list could not be refreshed. Reload the page to retry.`
+                    : `Subject ${sub.name} deleted successfully.`,
+                  res.refreshWarning ? 'warning' : 'success',
+                  5000
+                );
+                this.render(container);
+              }
+            } catch (error) {
+              Components.showToast(`Could not delete subject: ${error.message || 'The backend rejected the request.'}`, 'error', 6000);
             }
           }
         });
@@ -168,6 +178,10 @@ export const SubjectsView = {
   openSubjectModal(existing = null, parentContainer) {
     const isEdit = !!existing;
     const classes = Data.getClasses();
+    if (!classes.length) {
+      Components.showToast('No classes are available. Create a class before adding a subject.', 'error', 5000);
+      return;
+    }
 
     const content = `
       <form id="subject-form" class="space-y-4 text-xs">
@@ -234,9 +248,12 @@ export const SubjectsView = {
 
     document.getElementById('modal-cancel-sub').addEventListener('click', () => Components.closeModal());
 
-    document.getElementById('subject-form').addEventListener('submit', (e) => {
+    document.getElementById('subject-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData(e.target);
+      const form = e.target;
+      const submitButton = form.querySelector('button[type="submit"]');
+      const originalButtonText = submitButton ? submitButton.innerHTML : '';
+      const formData = new FormData(form);
       const payload = {
         name: formData.get('name'),
         code: formData.get('code'),
@@ -244,16 +261,32 @@ export const SubjectsView = {
         classId: formData.get('classId')
       };
 
-      if (isEdit) {
-        Data.updateSubject(existing.id, payload);
-        Components.showToast(`Subject ${payload.name} updated.`, 'success');
-      } else {
-        Data.addSubject(payload);
-        Components.showToast(`Subject ${payload.name} created.`, 'success');
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = isEdit ? 'Saving…' : 'Registering…';
       }
+      try {
+        const saved = isEdit
+          ? await Data.updateSubject(existing.id, payload)
+          : await Data.addSubject(payload);
+        const action = isEdit ? 'updated' : 'created';
+        Components.showToast(
+          saved.refreshWarning
+            ? `Subject ${payload.name} was ${action}, but the list could not be refreshed. Reload the page to retry.`
+            : `Subject ${payload.name} ${action}.`,
+          saved.refreshWarning ? 'warning' : 'success',
+          5000
+        );
 
-      Components.closeModal();
-      this.render(parentContainer);
+        Components.closeModal();
+        this.render(parentContainer);
+      } catch (error) {
+        Components.showToast(`Could not save subject: ${error.message || 'The backend rejected the request.'}`, 'error', 6000);
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.innerHTML = originalButtonText;
+        }
+      }
     });
   }
 };

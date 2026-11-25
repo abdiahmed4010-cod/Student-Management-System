@@ -16,7 +16,9 @@ const STORAGE_KEYS = {
   INCOMES: 'studently_incomes',
   EXPENSES: 'studently_expenses',
   SETTINGS: 'studently_settings',
-  SESSION: 'studently_session'
+  SESSION: 'studently_session',
+  FEE_STRUCTURES: 'studently_fee_structures',
+  INVOICES: 'studently_invoices'
 };
 
 // Initial Seed Data

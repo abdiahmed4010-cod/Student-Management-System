@@ -69,7 +69,7 @@ def drop_payment_immutability_triggers(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
+    atomic = False
     dependencies = [
         ("finances", "0001_initial"),
     ]

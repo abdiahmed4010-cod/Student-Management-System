@@ -1179,33 +1179,98 @@ export const PaymentsView = {
       paidInput.addEventListener('input', updatePreview);
     }
 
-    document.getElementById('record-payment-form').addEventListener('submit', (e) => {
+    document.getElementById('record-payment-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
-      const formData = new FormData(form);
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const origText = submitBtn ? submitBtn.innerHTML : '';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="inline-block animate-spin mr-2">⟳</span> Recording...';
+      }
 
+      const formData = new FormData(form);
       const user = Auth.getCurrentUser();
+      const idempotencyKey = `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+      // Resolve matching invoice if available
+      const invoices = Data.getInvoices(formData.get('studentId'));
+      const activeInvoice = invoices.find(inv => inv.month === formData.get('month') && inv.status !== 'PAID' && inv.status !== 'CANCELLED') || invoices[0];
+
       const paymentPayload = {
         studentId: formData.get('studentId'),
+        invoiceId: activeInvoice ? activeInvoice.id : null,
         feeCategory: formData.get('feeCategory'),
         month: formData.get('month'),
         amountDue: formData.get('amountDue'),
         amountPaid: formData.get('amountPaid'),
         paymentMethod: formData.get('paymentMethod'),
         paymentDate: formData.get('paymentDate'),
-        transactionRef: formData.get('transactionRef'),
+        transactionRef: formData.get('transactionRef') || `TXN-${Date.now().toString().slice(-6)}`,
+        idempotencyKey: idempotencyKey,
         recordedBy: user ? user.fullName : 'Administrator'
       };
 
-      const recorded = Data.recordPayment(paymentPayload);
-      Components.closeModal();
-      Components.showToast(`Recorded ${paymentPayload.feeCategory} payment of ${currency}${paymentPayload.amountPaid} via ${paymentPayload.paymentMethod}.`, 'success');
+      try {
+        // ── Step 1: Create PENDING local record and get confirmation promise ──
+        // Data.recordPayment is async and returns { localRecord, confirmationPromise }.
+        // We must await it so the PENDING record is written before we proceed.
+        const { localRecord, confirmationPromise } = await Data.recordPayment(paymentPayload);
 
-      const student = Data.getStudentById(paymentPayload.studentId);
-      const studentClass = classes.find(c => c.id === student.classId);
-      Components.showReceiptModal(recorded, student, studentClass, settings);
+        // Close the modal immediately — the PENDING record is now saved locally.
+        Components.closeModal();
 
-      if (parentContainer) this.render(parentContainer);
+        // Show a neutral "submitted" notice — NOT a success toast.
+        // Success is only confirmed after the backend responds.
+        Components.showToast(
+          `Payment submitted — awaiting confirmation from server...`,
+          'info'
+        );
+
+        // Re-render so the PENDING badge is visible in the ledger.
+        if (parentContainer) this.render(parentContainer);
+
+        // ── Step 2: Await backend confirmation asynchronously ─────────────────
+        // This runs after the modal is closed and the view has re-rendered.
+        // The user can continue using the UI while confirmation is in-flight.
+        const student = Data.getStudentById(paymentPayload.studentId);
+        const studentClass = classes.find(c => c.id === (student ? student.classId : ''));
+
+        confirmationPromise.then((confirmedPayment) => {
+          // Backend returned an authoritative receipt — show success + receipt.
+          Components.showToast(
+            `✓ ${paymentPayload.feeCategory} payment of ${currency}${parseFloat(paymentPayload.amountPaid).toFixed(2)} confirmed via ${paymentPayload.paymentMethod}.`,
+            'success'
+          );
+          // Pass the confirmed payment record (not the wrapper) to the receipt modal.
+          if (student) {
+            Components.showReceiptModal(confirmedPayment, student, studentClass, settings);
+          }
+          // Re-render ledger — payment is now CONFIRMED and will appear in totals.
+          if (parentContainer) this.render(parentContainer);
+        }).catch((confirmErr) => {
+          // Backend rejected or network failure — do NOT show success or receipt.
+          const isPending = !confirmErr.status || confirmErr.status >= 500;
+          const msg = isPending
+            ? `Payment is pending confirmation. It will be retried automatically.`
+            : (confirmErr.message || 'Payment confirmation failed. Please check the payment status.');
+          Components.showToast(msg, isPending ? 'warning' : 'error');
+          // Re-render so PENDING/FAILED badge is visible.
+          if (parentContainer) this.render(parentContainer);
+        });
+
+      } catch (err) {
+        // submitPayment() itself threw (e.g. permission denied, in-flight duplicate).
+        Components.showToast(err.message || 'Failed to submit payment.', 'error');
+      } finally {
+        // Re-enable the submit button once the local record is written (or on error).
+        // The button is re-enabled here, not after backend confirmation, so the user
+        // can submit a NEW payment while the previous one awaits confirmation.
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origText;
+        }
+      }
     });
   },
 

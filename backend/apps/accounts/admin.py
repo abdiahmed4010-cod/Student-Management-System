@@ -13,7 +13,22 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import ReadOnlyPasswordHashField
 from django.contrib.auth.password_validation import validate_password
 
-from apps.accounts.models import User
+from apps.accounts.models import User, UserPermission
+
+
+class UserPermissionInline(admin.TabularInline):
+    model = UserPermission
+    extra = 0
+    fields = (
+        "module",
+        "can_view",
+        "can_add",
+        "can_edit",
+        "can_delete",
+        "can_import",
+        "can_print",
+        "can_export",
+    )
 
 
 class CustomUserCreationForm(forms.ModelForm):
@@ -123,6 +138,7 @@ class CustomUserAdmin(BaseUserAdmin):
     ordering = ("full_name",)
     filter_horizontal = ()
     readonly_fields = ("id", "last_login", "created_at", "updated_at")
+    inlines = [UserPermissionInline]
 
     fieldsets = (
         (None, {"fields": ("id", "email", "password")}),
@@ -151,3 +167,22 @@ class CustomUserAdmin(BaseUserAdmin):
             },
         ),
     )
+
+
+@admin.register(UserPermission)
+class UserPermissionAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "module",
+        "can_view",
+        "can_add",
+        "can_edit",
+        "can_delete",
+        "can_import",
+        "can_print",
+        "can_export",
+    )
+    list_filter = ("module", "can_view", "can_add", "can_edit", "can_delete")
+    search_fields = ("user__email", "user__full_name", "module")
+    ordering = ("user__email", "module")
+
